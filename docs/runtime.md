@@ -17,7 +17,7 @@ Compiled FASLs and ASDF cache data are written to the Docker named volume `self-
 - `make repl` / `./bin/container --noinform`: build the image and start an interactive SBCL session.
 - `make live-smoke`: make one minimal live OpenRouter chat-completions request.
 - `make live-tool-smoke`: make a live tool-capable OpenRouter request using the deterministic `echo` handler.
-- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: run one user prompt through the OpenRouter tool loop. Omit `--prompt` to read stdin. The command completes only after the model returns a final response with no tool calls.
+- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls.
 
 The wrapper rebuilds before every command, relying on Docker layer caching when inputs are unchanged. Set `HARNESS_IMAGE` to use an alternative local tag.
 
@@ -32,8 +32,10 @@ The wrapper rebuilds before every command, relying on Docker layer caching when 
 `bin/run` remains a readiness check: it verifies that the actual harness entry
 point, rather than a host-only script, can load and construct its configured
 backend. The OpenRouter non-streaming chat-completions adapter and sequential
-tool-call loop are implemented. `bin/chat` supplies the current single-prompt
-CLI: it registers `run_shell`, executes the requested command inside the
-container, sends the result back to the model, and prints the final assistant
-response. It does not provide a persistent multi-turn REPL, streaming/SSE, or
-a policy/sandbox layer.
+tool-call loop are implemented. `bin/chat` provides both a one-prompt CLI and
+a terminal-only persistent interactive chat session. The interactive session
+keeps its ordered system/user/assistant/tool history in memory, executes
+`run_shell` inside the container, sends matching results back to the model, and
+prints final assistant content. It does not provide streaming/SSE, persistent
+transcripts, cross-process resume, or a policy/sandbox layer. `make repl`
+remains the raw Docker SBCL REPL; it is not the model-chat interface.

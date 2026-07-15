@@ -81,19 +81,31 @@ make live-tool-smoke
 It makes a real tool-capable provider interaction and prints only the resolved
 model, tool invocation count, and final assistant text.
 
-## One-prompt chat CLI
+## Chat CLI
 
-Use `bin/chat` for a one-prompt OpenRouter session that can call the harness
-`run_shell` tool inside its Docker container. It loops until the model returns
-a final response with no tool calls:
+`bin/chat` runs the harness `run_shell` tool inside its Docker container. It has
+three deliberately distinct modes:
 
 ```bash
+# Interactive multi-turn chat (terminal stdin and stdout; /exit, /quit, or EOF ends it).
+./bin/chat --model openai/gpt-4.1-mini
+
+# One-shot chat.
 ./bin/chat --model openai/gpt-4.1-mini \
   --prompt "Use run_shell to inspect the repository, then summarize it."
+
+# Piped input is also one-shot, not a multi-line interactive transcript.
+printf '%s' 'Summarize the repository.' | ./bin/chat
 ```
 
-Omit `--prompt` to read the prompt from stdin. Run `./bin/chat --help` for
-limits, defaults, requirements, and exit-status behavior.
+The interactive process retains one ordered in-memory history: its system
+message, each completed user/assistant exchange, and tool-call/tool-result
+messages. Empty interactive input makes no provider request. A failed turn is
+reported on stderr without condition detail, leaves that history untouched, and
+the session continues; normal exit after any failed turn is non-zero. Final
+assistant content goes to stdout while tool and outcome diagnostics go to
+stderr. `--prompt` retains the existing one-shot exit behavior. Run
+`./bin/chat --help` for defaults and requirements.
 
 See [`docs/runtime.md`](docs/runtime.md) for runtime guarantees and [`docs/initial-architecture.md`](docs/initial-architecture.md) for design questions.
 

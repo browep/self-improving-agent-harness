@@ -180,7 +180,7 @@ the transport layer owns conversion to OpenRouter's JSON field names."
   (labels ((run-next-round (current-request round)
              (let ((response (complete backend current-request)))
                (if (null (completion-response-tool-calls response))
-                   response
+                   (values response (completion-request-messages current-request))
                    (progn
                      (when (>= round max-rounds)
                        (error "Tool-call loop exceeded its ~D round limit." max-rounds))

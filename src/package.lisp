@@ -5,6 +5,12 @@
    #:backend-name
    #:complete
    #:run-tool-loop
+   #:chat-session
+   #:make-chat-session
+   #:chat-session-history
+   #:chat-session-turn
+   #:chat-session-failed-turn-p
+   #:note-chat-session-failure
    #:completion-request
    #:make-completion-request
    #:completion-request-model

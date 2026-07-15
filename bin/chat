@@ -1,22 +1,24 @@
 #!/usr/bin/env sh
-# Run one OpenRouter chat/tool-call session inside the project Docker runtime.
+# Run an OpenRouter chat/tool-call session inside the project Docker runtime.
 set -eu
 
 usage() {
   cat <<'EOF'
 Usage: bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]
 
-Run one prompt through OpenRouter and the harness tool loop until the model
-returns a final response without tool calls. The prompt may be supplied by
---prompt or stdin. OPENROUTER_API_KEY must be exported or present in .env.
+With --prompt, run one prompt through OpenRouter and the harness tool loop until
+it returns a final response. Without --prompt, a terminal stdin/stdout starts
+an interactive multi-turn session; type /exit or /quit (or send EOF) to leave.
+Piped stdin remains a one-shot prompt and is never interpreted as a transcript.
+OPENROUTER_API_KEY must be exported or present in .env.
 
 Defaults:
   --model       openai/gpt-4.1-mini
   --max-rounds  8
 
-Exit status is 0 only for a final model response; configuration, provider,
-tool, and exhausted-round errors are non-zero. The command always runs Lisp in
-the project Docker container; it never invokes host Lisp.
+One-shot failures are non-zero. Interactive failed turns are reported on stderr
+and the session continues with its previous history; a later normal exit is
+non-zero if any turn failed. All Lisp execution stays in Docker.
 EOF
 }
 
@@ -47,11 +49,18 @@ esac
 [ "$max_rounds" -gt 0 ] || { printf '%s\n' 'bin/chat: --max-rounds must be positive' >&2; exit 2; }
 [ -n "$model" ] || { printf '%s\n' 'bin/chat: --model must not be empty' >&2; exit 2; }
 
+mode=one-shot
 if [ "$prompt_supplied" = false ]; then
-  [ ! -t 0 ] || { printf '%s\n' 'bin/chat: supply --prompt or pipe a prompt on stdin' >&2; exit 2; }
-  prompt=$(cat)
+  if [ ! -t 0 ]; then
+    prompt=$(cat)
+  elif [ -t 1 ]; then
+    mode=interactive
+  else
+    printf '%s\n' 'bin/chat: use --prompt or piped stdin when stdout is not a terminal' >&2
+    exit 2
+  fi
 fi
-[ -n "$prompt" ] || { printf '%s\n' 'bin/chat: prompt must not be empty' >&2; exit 2; }
+[ "$mode" = interactive ] || [ -n "$prompt" ] || { printf '%s\n' 'bin/chat: prompt must not be empty' >&2; exit 2; }
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 container_runner=${HARNESS_CHAT_RUNNER:-"$repo_root/bin/container"}
@@ -60,10 +69,24 @@ if [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$repo_root/.env" ]; then
   exit 2
 fi
 
-export HARNESS_CHAT_PROMPT=$prompt
+export HARNESS_CHAT_MODE=$mode
 export HARNESS_CHAT_MODEL=$model
 export HARNESS_CHAT_MAX_ROUNDS=$max_rounds
+if [ "$mode" = one-shot ]; then
+  export HARNESS_CHAT_PROMPT=$prompt
+fi
+
+if [ "$mode" = interactive ]; then
+  exec "$container_runner" --interactive \
+    --env HARNESS_CHAT_MODE \
+    --env HARNESS_CHAT_MODEL \
+    --env HARNESS_CHAT_MAX_ROUNDS \
+    --noinform \
+    --load scripts/chat.lisp
+fi
+
 exec "$container_runner" \
+  --env HARNESS_CHAT_MODE \
   --env HARNESS_CHAT_PROMPT \
   --env HARNESS_CHAT_MODEL \
   --env HARNESS_CHAT_MAX_ROUNDS \
