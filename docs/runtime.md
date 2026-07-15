@@ -13,8 +13,11 @@ Compiled FASLs and ASDF cache data are written to the Docker named volume `self-
 ## Commands
 
 - `make test` / `./bin/test`: build the image and execute `asdf:test-system`. The container has no network.
-- `make run` / `./bin/run`: build the image and execute the harness entry point. This permits network access for the future OpenRouter adapter.
+- `make run` / `./bin/run`: build the image and execute the harness readiness entry point. This permits network access but does not make a provider request.
 - `make repl` / `./bin/container --noinform`: build the image and start an interactive SBCL session.
+- `make live-smoke`: make one minimal live OpenRouter chat-completions request.
+- `make live-tool-smoke`: make a live tool-capable OpenRouter request using the deterministic `echo` handler.
+- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: run one user prompt through the OpenRouter tool loop. Omit `--prompt` to read stdin. The command completes only after the model returns a final response with no tool calls.
 
 The wrapper rebuilds before every command, relying on Docker layer caching when inputs are unchanged. Set `HARNESS_IMAGE` to use an alternative local tag.
 
@@ -28,7 +31,9 @@ The wrapper rebuilds before every command, relying on Docker layer caching when 
 
 `bin/run` remains a readiness check: it verifies that the actual harness entry
 point, rather than a host-only script, can load and construct its configured
-backend. The OpenRouter non-streaming chat-completions adapter is implemented;
-use a dedicated live integration command with a runtime-injected key for a
-provider request. Tool execution, evaluators, improvement loops, and durable
-experiment reporting remain separate workstreams.
+backend. The OpenRouter non-streaming chat-completions adapter and sequential
+tool-call loop are implemented. `bin/chat` supplies the current single-prompt
+CLI: it registers `run_shell`, executes the requested command inside the
+container, sends the result back to the model, and prints the final assistant
+response. It does not provide a persistent multi-turn REPL, streaming/SSE, or
+a policy/sandbox layer.
