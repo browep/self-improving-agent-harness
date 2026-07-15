@@ -8,7 +8,7 @@ Usage: bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]
 
 With --prompt, run one prompt through OpenRouter and the harness tool loop until
 it returns a final response. Without --prompt, a terminal stdin/stdout starts
-an interactive multi-turn session; type /exit or /quit (or send EOF) to leave.
+an interactive multi-turn session; type /exit or /quit, press Ctrl-C, or send EOF to leave.
 Piped stdin remains a one-shot prompt and is never interpreted as a transcript.
 OPENROUTER_API_KEY must be exported or present in .env.
 

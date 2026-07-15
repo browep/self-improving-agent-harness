@@ -87,7 +87,7 @@ model, tool invocation count, and final assistant text.
 three deliberately distinct modes:
 
 ```bash
-# Interactive multi-turn chat (terminal stdin and stdout; /exit, /quit, or EOF ends it).
+# Interactive multi-turn chat (terminal stdin and stdout; /exit, /quit, Ctrl-C, or EOF ends it).
 ./bin/chat --model openai/gpt-4.1-mini
 
 # One-shot chat.

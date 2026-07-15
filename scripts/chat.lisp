@@ -45,31 +45,38 @@
                   :backend backend :model model :options (chat-options)
                   :handlers `(("run_shell" . ,#'shell-tool)) :max-rounds max-rounds)))
     (format *error-output*
-            "Interactive OpenRouter chat (model=~A). Type /exit or /quit to leave.~%"
+            "Interactive OpenRouter chat (model=~A). Type /exit or /quit, or press Ctrl-C, to leave.~%"
             model)
-    (loop
-      (format *error-output* "chat> ")
-      (finish-output *error-output*)
-      (let ((input (read-line *standard-input* nil :eof)))
-        (cond
-          ((eq input :eof) (return))
-          ((or (string= input "/exit") (string= input "/quit")) (return))
-          ((zerop (length input))
-           (format *error-output* "Empty input ignored.~%"))
-          (t
-           (handler-case
-               (let ((response (self-improving-agent-harness:chat-session-turn session input)))
-                 (format t "~A~%"
-                         (self-improving-agent-harness:completion-response-text response))
-                 (format *error-output* "OUTCOME final-response model=~A~%"
-                         (self-improving-agent-harness:completion-response-model response)))
-             (error ()
-               ;; Deliberately avoid printing provider/handler condition text: it may
-               ;; contain external details. The session remains usable and history is unchanged.
-               (self-improving-agent-harness:note-chat-session-failure session)
-               (format *error-output* "TURN_FAILED; session continues and prior history is retained.~%"))))))
-    (when (self-improving-agent-harness:chat-session-failed-turn-p session)
-      (uiop:quit 1)))))
+    (handler-bind
+        ((sb-sys:interactive-interrupt
+           (lambda (condition)
+             (declare (ignore condition))
+             (format *error-output* "~%Interrupted; leaving interactive chat.~%")
+             (finish-output *error-output*)
+             (return-from run-interactive nil))))
+      (loop
+        (format *error-output* "chat> ")
+        (finish-output *error-output*)
+        (let ((input (read-line *standard-input* nil :eof)))
+          (cond
+            ((eq input :eof) (return))
+            ((or (string= input "/exit") (string= input "/quit")) (return))
+            ((zerop (length input))
+             (format *error-output* "Empty input ignored.~%"))
+            (t
+             (handler-case
+                 (let ((response (self-improving-agent-harness:chat-session-turn session input)))
+                   (format t "~A~%"
+                           (self-improving-agent-harness:completion-response-text response))
+                   (format *error-output* "OUTCOME final-response model=~A~%"
+                           (self-improving-agent-harness:completion-response-model response)))
+               (error ()
+                 ;; Deliberately avoid printing provider/handler condition text: it may
+                 ;; contain external details. The session remains usable and history is unchanged.
+                 (self-improving-agent-harness:note-chat-session-failure session)
+                 (format *error-output* "TURN_FAILED; session continues and prior history is retained.~%")))))))
+      (when (self-improving-agent-harness:chat-session-failed-turn-p session)
+        (uiop:quit 1)))))
 
 (let* ((mode (required-environment "HARNESS_CHAT_MODE"))
        (model (required-environment "HARNESS_CHAT_MODEL"))
