@@ -44,8 +44,8 @@ esac
 
 help_output=$($repo_root/bin/chat --help)
 case "$help_output" in
-  *'Usage: bin/chat'*) ;;
-  *) printf 'Test failed: help output missing usage\n' >&2; exit 1 ;;
+  *'Usage: bin/chat'*'OpenRouter model ID'*) ;;
+  *) printf 'Test failed: help output missing model-ID guidance\n' >&2; exit 1 ;;
 esac
 
 expect_error 2 'must be a positive integer' \

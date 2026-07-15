@@ -111,6 +111,42 @@ the chat. `--prompt` retains the existing one-shot exit behavior. Run
 
 See [`docs/runtime.md`](docs/runtime.md) for runtime guarantees and [`docs/initial-architecture.md`](docs/initial-architecture.md) for design questions.
 
+## Selecting a chat model
+
+`--model` is passed directly to OpenRouter. Supply the exact `id` field from
+OpenRouter's Models API (for example, `openai/gpt-4.1-mini`), not the human
+`name` shown in the model picker. The chat always exposes the `run_shell` tool,
+so select a text-output model whose `supported_parameters` includes `tools`.
+
+- Browse and filter models interactively: <https://openrouter.ai/models>
+- API reference and current model metadata: <https://openrouter.ai/docs/guides/overview/models>
+
+List tool-capable text models and their request IDs from the public API:
+
+```bash
+curl -fsSL 'https://openrouter.ai/api/v1/models?supported_parameters=tools' |
+  python3 -c '
+import json, sys
+for model in json.load(sys.stdin)["data"]:
+    if "text" in model.get("architecture", {}).get("output_modalities", []):
+        print("{}\t{}\tcontext={}".format(model["id"], model["name"], model["context_length"]))
+'
+```
+
+The first column is the value to pass to `--model`. Verify an individual ID,
+including its tool capability and deprecation metadata, before using it:
+
+```bash
+curl -fsSL 'https://openrouter.ai/api/v1/model/openai/gpt-4.1-mini'
+```
+
+Model availability, price, and capability metadata change over time; query the
+API instead of copying an old display name or relying on an alias. Then run:
+
+```bash
+./bin/chat --model openai/gpt-4.1-mini
+```
+
 ## Repository layout
 
 - `src/` — Common Lisp packages, backend protocol, and harness entry point.

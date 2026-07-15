@@ -13,8 +13,12 @@ Piped stdin remains a one-shot prompt and is never interpreted as a transcript.
 OPENROUTER_API_KEY must be exported or present in .env.
 
 Defaults:
-  --model       openai/gpt-4.1-mini
+  --model       openai/gpt-4.1-mini (an exact OpenRouter model ID)
   --max-rounds  8
+
+Pass the Models API's `id` field to --model, not a display name. Browse
+https://openrouter.ai/models or query https://openrouter.ai/api/v1/models;
+this chat supplies run_shell, so choose a model supporting the `tools` parameter.
 
 One-shot failures are non-zero. Interactive failed turns are reported on stderr
 and the session continues with its previous history; a later normal exit is
