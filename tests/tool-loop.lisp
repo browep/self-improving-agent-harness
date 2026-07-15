@@ -100,5 +100,18 @@
                    "handler failures produce an explicit outcome")
       (ensure-true (not (search "private handler detail" (princ-to-string condition)))
                    "handler failure details are redacted")))
+  (ensure-error-containing
+   (lambda ()
+     (self-improving-agent-harness:run-tool-loop
+      (make-instance 'scripted-backend
+                     :name "scripted"
+                     :responses (list (make-completion-response
+                                       :tool-calls '((:id "call-limit" :type "function"
+                                                      :name "echo" :arguments "{}")))))
+      (make-completion-request :model "test/model" :messages '())
+      `(("echo" . ,(lambda (arguments) arguments)))
+      :max-rounds 0))
+   "Tool-call loop exceeded its 0 round limit"
+   "exhausted tool-loop round limits produce an explicit outcome")
   (format t "Tool-loop tests passed.~%")
   t)

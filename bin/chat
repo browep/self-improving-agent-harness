@@ -45,6 +45,7 @@ case "$max_rounds" in
   ''|*[!0-9]*) printf '%s\n' 'bin/chat: --max-rounds must be a positive integer' >&2; exit 2 ;;
 esac
 [ "$max_rounds" -gt 0 ] || { printf '%s\n' 'bin/chat: --max-rounds must be positive' >&2; exit 2; }
+[ -n "$model" ] || { printf '%s\n' 'bin/chat: --model must not be empty' >&2; exit 2; }
 
 if [ "$prompt_supplied" = false ]; then
   [ ! -t 0 ] || { printf '%s\n' 'bin/chat: supply --prompt or pipe a prompt on stdin' >&2; exit 2; }
@@ -53,6 +54,7 @@ fi
 [ -n "$prompt" ] || { printf '%s\n' 'bin/chat: prompt must not be empty' >&2; exit 2; }
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+container_runner=${HARNESS_CHAT_RUNNER:-"$repo_root/bin/container"}
 if [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$repo_root/.env" ]; then
   printf '%s\n' 'bin/chat: OPENROUTER_API_KEY must be exported or set in .env' >&2
   exit 2
@@ -61,7 +63,7 @@ fi
 export HARNESS_CHAT_PROMPT=$prompt
 export HARNESS_CHAT_MODEL=$model
 export HARNESS_CHAT_MAX_ROUNDS=$max_rounds
-exec "$repo_root/bin/container" \
+exec "$container_runner" \
   --env HARNESS_CHAT_PROMPT \
   --env HARNESS_CHAT_MODEL \
   --env HARNESS_CHAT_MAX_ROUNDS \
