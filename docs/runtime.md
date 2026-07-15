@@ -6,7 +6,7 @@ All project Common Lisp code runs in the repository's Docker environment. The ho
 
 ## Runtime contract
 
-`Dockerfile` builds a Debian Bookworm image with SBCL and ASDF. The source tree is not copied into the image. Every wrapper mounts the checked-out repository read-only at `/workspace`, so a run cannot write source, test fixtures, or documentation through the project mount.
+`Dockerfile` builds a Debian Bookworm image with SBCL and ASDF. The source tree is not copied into the image. Wrappers mount the checked-out repository read-only at `/workspace` by default, so tests and ordinary harness runs cannot write source, test fixtures, or documentation through the project mount. `bin/chat` is the deliberate exception: it mounts `/workspace` read-write because its `run_shell` tool is intended to let the chat agent modify the checked-out workspace.
 
 Compiled FASLs and ASDF cache data are written to the Docker named volume `self-improving-agent-harness-cache`. This makes the runtime portable while preserving compilation performance between invocations.
 
@@ -17,7 +17,7 @@ Compiled FASLs and ASDF cache data are written to the Docker named volume `self-
 - `make repl` / `./bin/container --noinform`: build the image and start an interactive SBCL session.
 - `make live-smoke`: make one minimal live OpenRouter chat-completions request.
 - `make live-tool-smoke`: make a live tool-capable OpenRouter request using the deterministic `echo` handler.
-- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls.
+- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls. Its workspace mount is read-write for `run_shell`; the caller is responsible for reviewing and committing any source changes it makes.
 
 The wrapper rebuilds before every command, relying on Docker layer caching when inputs are unchanged. Set `HARNESS_IMAGE` to use an alternative local tag.
 

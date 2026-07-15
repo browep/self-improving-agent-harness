@@ -81,7 +81,7 @@ if [ "$mode" = one-shot ]; then
 fi
 
 if [ "$mode" = interactive ]; then
-  exec "$container_runner" --interactive \
+  exec "$container_runner" --writable-workspace --interactive \
     --env HARNESS_CHAT_MODE \
     --env HARNESS_CHAT_MODEL \
     --env HARNESS_CHAT_MAX_ROUNDS \
@@ -89,7 +89,7 @@ if [ "$mode" = interactive ]; then
     --load scripts/chat.lisp
 fi
 
-exec "$container_runner" \
+exec "$container_runner" --writable-workspace \
   --env HARNESS_CHAT_MODE \
   --env HARNESS_CHAT_PROMPT \
   --env HARNESS_CHAT_MODEL \

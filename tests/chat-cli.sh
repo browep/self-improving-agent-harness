@@ -36,6 +36,13 @@ expect_error() {
 expect_success 'mode=one-shot prompt=flag prompt model=test/model max-rounds=3' \
   "$repo_root/bin/chat" --model test/model --max-rounds 3 --prompt 'flag prompt'
 
+workspace_output=$(OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+  "$repo_root/bin/chat" --prompt 'workspace check')
+case "$workspace_output" in
+  *'args=--writable-workspace --env HARNESS_CHAT_MODE'*) ;;
+  *) printf 'Test failed: chat did not request a writable workspace\n' >&2; exit 1 ;;
+esac
+
 stdin_output=$(printf 'stdin prompt' | OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat")
 case "$stdin_output" in
   *'mode=one-shot prompt=stdin prompt model=openai/gpt-4.1-mini max-rounds=8'*) ;;

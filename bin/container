@@ -7,6 +7,7 @@ image=${HARNESS_IMAGE:-self-improving-agent-harness:dev}
 network_option=
 interactive_option=
 forward_env_options=
+workspace_mount="$repo_root:/workspace:ro"
 
 # Only repository-provided wrappers may disable networking. This is intentionally
 # a narrow switch instead of accepting arbitrary Docker options from the caller.
@@ -18,6 +19,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-network)
       network_option=--network=none
+      shift
+      ;;
+    --writable-workspace)
+      workspace_mount="$repo_root:/workspace"
       shift
       ;;
     --env)
@@ -44,14 +49,14 @@ if [ -f "$repo_root/.env" ]; then
   if [ "${OPENROUTER_API_KEY+x}" = x ]; then
     exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init \
       --env-file "$repo_root/.env" --env OPENROUTER_API_KEY \
-      --volume "$repo_root:/workspace:ro" \
+      --volume "$workspace_mount" \
       --volume self-improving-agent-harness-cache:/cache \
       --volume self-improving-agent-harness-logs:/logs \
       --workdir /workspace "$image" "$@"
   fi
   exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init \
     --env-file "$repo_root/.env" \
-    --volume "$repo_root:/workspace:ro" \
+    --volume "$workspace_mount" \
     --volume self-improving-agent-harness-cache:/cache \
     --volume self-improving-agent-harness-logs:/logs \
     --workdir /workspace "$image" "$@"
@@ -59,14 +64,14 @@ fi
 
 if [ "${OPENROUTER_API_KEY+x}" = x ]; then
   exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init --env OPENROUTER_API_KEY \
-    --volume "$repo_root:/workspace:ro" \
+    --volume "$workspace_mount" \
     --volume self-improving-agent-harness-cache:/cache \
     --volume self-improving-agent-harness-logs:/logs \
     --workdir /workspace "$image" "$@"
 fi
 
 exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init \
-  --volume "$repo_root:/workspace:ro" \
+  --volume "$workspace_mount" \
   --volume self-improving-agent-harness-cache:/cache \
   --volume self-improving-agent-harness-logs:/logs \
   --workdir /workspace "$image" "$@"

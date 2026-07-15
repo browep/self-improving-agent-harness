@@ -36,7 +36,7 @@ separate workstreams.
 
 ## Docker-first runtime
 
-**Docker is the required Common Lisp runtime.** Do not install or invoke a host Lisp implementation for project code, tests, or harness runs. The project image provides SBCL and ASDF; the repository source is mounted read-only, and compiled artifacts live in a named Docker volume.
+**Docker is the required Common Lisp runtime.** Do not install or invoke a host Lisp implementation for project code, tests, or harness runs. The project image provides SBCL and ASDF; the repository source is mounted read-only by default, and compiled artifacts live in a named Docker volume. `bin/chat` deliberately mounts its workspace read-write so its `run_shell` tool can make requested workspace changes.
 
 Prerequisite: Docker Engine. No host SBCL, Quicklisp, or system package installation is required.
 
@@ -51,7 +51,7 @@ make run
 make repl
 ```
 
-The equivalent direct commands are `./bin/test`, `./bin/run`, and `./bin/container --noinform`. `bin/container` rebuilds the image before each invocation, mounts the repository at `/workspace:ro`, and keeps ASDF's cache in the `self-improving-agent-harness-cache` volume.
+The equivalent direct commands are `./bin/test`, `./bin/run`, and `./bin/container --noinform`. `bin/container` rebuilds the image before each invocation, mounts the repository at `/workspace:ro` by default, and keeps ASDF's cache in the `self-improving-agent-harness-cache` volume. `bin/chat` invokes it with `--writable-workspace`, mounting the repository at `/workspace` without the read-only flag.
 
 For a real OpenRouter request, place a key in an untracked `.env` file or
 explicitly export it before invoking the Docker-backed live smoke command:
