@@ -6,6 +6,7 @@
   :serial t
   :components ((:file "src/package")
                (:file "src/backend")
+               (:file "src/shell-tool")
                (:file "src/chat-session")
                (:file "src/main"))
   :in-order-to ((test-op (test-op "self-improving-agent-harness/tests"))))
@@ -17,7 +18,8 @@
                (:file "tests/backend")
                (:file "tests/openrouter-adapter")
                (:file "tests/tool-loop")
-               (:file "tests/chat-session"))
+               (:file "tests/chat-session")
+               (:file "tests/shell-tool"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call :self-improving-agent-harness/tests :run-tests)))

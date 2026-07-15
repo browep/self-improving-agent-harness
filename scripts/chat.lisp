@@ -9,13 +9,7 @@
     value))
 
 (defun shell-tool (arguments)
-  (let ((command (gethash "command" arguments)))
-    (unless (and (stringp command) (plusp (length command)))
-      (error "run_shell requires a non-empty command."))
-    (format *error-output* "TOOL_CALL name=run_shell~%")
-    (uiop:run-program (list "/bin/sh" "-lc" command)
-                      :output :string
-                      :error-output :output)))
+  (self-improving-agent-harness:run-shell-tool arguments))
 
 (defun chat-options ()
   '(:temperature 0.2

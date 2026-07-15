@@ -33,5 +33,6 @@
       (run-openrouter-adapter-tests)
       (run-tool-loop-tests)
       (run-chat-session-tests)
+      (run-shell-tool-tests)
       (format t "Self-improving-agent-harness smoke tests passed.~%")
       t))

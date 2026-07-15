@@ -83,6 +83,11 @@ the transport layer owns conversion to OpenRouter's JSON field names."
     (yason:encode (openrouter-json-value (openrouter-request-payload request))
                   stream)))
 
+(defun openrouter-request-octets (request)
+  "Encode REQUEST JSON as UTF-8 bytes for Drakma's HTTP transport."
+  (sb-ext:string-to-octets (openrouter-request-json request)
+                           :external-format :utf-8))
+
 (defun openrouter-json-field (object name)
   "Read NAME from a decoded OpenRouter JSON object represented as an alist."
   (etypecase object
@@ -207,8 +212,8 @@ the transport layer owns conversion to OpenRouter's JSON field names."
         (drakma:http-request
          (openrouter-completions-url backend)
          :method :post
-         :content (openrouter-request-json request)
-         :content-type "application/json"
+         :content (openrouter-request-octets request)
+         :content-type "application/json; charset=utf-8"
          :additional-headers
          `(("Authorization" . ,(format nil "Bearer ~A" api-key))))
       (declare (ignore response-headers))

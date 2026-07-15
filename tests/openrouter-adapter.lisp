@@ -94,6 +94,14 @@
                  "request JSON serializes tool definitions")
     (ensure-true (search "\"name\":\"echo\"" json)
                  "request JSON serializes the declared tool name"))
+  (let* ((em-dash (string (code-char #x2014)))
+         (request (make-completion-request
+                   :model "test/model"
+                   :messages `((:role "user" :content ,(format nil "tool output: ~A" em-dash)))))
+         (octets (self-improving-agent-harness::openrouter-request-octets request))
+         (decoded (sb-ext:octets-to-string octets :external-format :utf-8)))
+    (ensure-true (search em-dash decoded)
+                 "request transport encodes Unicode tool output as UTF-8 octets"))
   (ensure-equal "{\"id\":\"gen-123\"}"
                 (self-improving-agent-harness::openrouter-response-body-string
                  #(123 34 105 100 34 58 34 103 101 110 45 49 50 51 34 125))
