@@ -64,22 +64,33 @@
                            (self-improving-agent-harness:completion-response-text response))
                    (format *error-output* "OUTCOME final-response model=~A~%"
                            (self-improving-agent-harness:completion-response-model response)))
-               (error ()
-                 ;; Deliberately avoid printing provider/handler condition text: it may
-                 ;; contain external details. The session remains usable and history is unchanged.
+               (error (condition)
+                 ;; The condition is already redacted by the tool loop where needed.
                  (self-improving-agent-harness:note-chat-session-failure session)
-                 (format *error-output* "TURN_FAILED; session continues and prior history is retained.~%")))))))
+                 (format *error-output*
+                         "TURN_FAILED: ~A; session continues and prior history is retained.~%"
+                         condition)))))))
       (when (self-improving-agent-harness:chat-session-failed-turn-p session)
         (uiop:quit 1)))))
 
 (let* ((mode (required-environment "HARNESS_CHAT_MODE"))
        (model (required-environment "HARNESS_CHAT_MODEL"))
        (max-rounds (parse-integer (required-environment "HARNESS_CHAT_MAX_ROUNDS")))
+       (log-directory (or (uiop:getenv "HARNESS_LOG_DIR") "/logs"))
        (backend (make-chat-backend)))
-  (cond
-    ((string= mode "one-shot")
-     (run-one-shot backend model max-rounds (required-environment "HARNESS_CHAT_PROMPT")))
-    ((string= mode "interactive")
-     (run-interactive backend model max-rounds))
-    (t (error "HARNESS_CHAT_MODE must be one-shot or interactive.")))
+  (self-improving-agent-harness:configure-interaction-logging log-directory)
+  (self-improving-agent-harness:log-interaction
+   :info "session-start" :mode mode :model model :max-rounds max-rounds)
+  (handler-case
+      (cond
+        ((string= mode "one-shot")
+         (run-one-shot backend model max-rounds (required-environment "HARNESS_CHAT_PROMPT")))
+        ((string= mode "interactive")
+         (run-interactive backend model max-rounds))
+        (t (error "HARNESS_CHAT_MODE must be one-shot or interactive.")))
+    (error (condition)
+      (self-improving-agent-harness:log-interaction
+       :error "session-failed" :message (princ-to-string condition))
+      (error condition)))
+  (self-improving-agent-harness:log-interaction :info "session-ended" :mode mode)
   (uiop:quit 0))

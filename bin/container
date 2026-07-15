@@ -46,12 +46,14 @@ if [ -f "$repo_root/.env" ]; then
       --env-file "$repo_root/.env" --env OPENROUTER_API_KEY \
       --volume "$repo_root:/workspace:ro" \
       --volume self-improving-agent-harness-cache:/cache \
+      --volume self-improving-agent-harness-logs:/logs \
       --workdir /workspace "$image" "$@"
   fi
   exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init \
     --env-file "$repo_root/.env" \
     --volume "$repo_root:/workspace:ro" \
     --volume self-improving-agent-harness-cache:/cache \
+    --volume self-improving-agent-harness-logs:/logs \
     --workdir /workspace "$image" "$@"
 fi
 
@@ -59,10 +61,12 @@ if [ "${OPENROUTER_API_KEY+x}" = x ]; then
   exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init --env OPENROUTER_API_KEY \
     --volume "$repo_root:/workspace:ro" \
     --volume self-improving-agent-harness-cache:/cache \
+    --volume self-improving-agent-harness-logs:/logs \
     --workdir /workspace "$image" "$@"
 fi
 
 exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init \
   --volume "$repo_root:/workspace:ro" \
   --volume self-improving-agent-harness-cache:/cache \
+  --volume self-improving-agent-harness-logs:/logs \
   --workdir /workspace "$image" "$@"

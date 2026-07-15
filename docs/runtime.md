@@ -27,6 +27,24 @@ The wrapper rebuilds before every command, relying on Docker layer caching when 
 
 `.dockerignore` excludes `.env`, Git metadata, and local artifacts from the Docker build context. It is still the caller's responsibility to never pass credentials on a command line or commit them.
 
+## Interaction logs
+
+Every `bin/container` run mounts the named Docker volume
+`self-improving-agent-harness-logs` at `/logs`. `bin/chat` appends UTF-8 JSON
+lines to `/logs/chat.log` for session lifecycle, user turns, completed assistant
+turns, tool invocations, and safe failure messages. It does not log the
+OpenRouter API key or raw tool output, but prompts, assistant responses, and
+tool commands can themselves be sensitive.
+
+Inspect the latest entries from the host:
+
+```bash
+sg docker -c "docker run --rm --entrypoint /bin/sh \\
+  --volume self-improving-agent-harness-logs:/logs \\
+  self-improving-agent-harness:dev \\
+  -lc 'tail -n 200 /logs/chat.log'"
+```
+
 ## Current boundary
 
 `bin/run` remains a readiness check: it verifies that the actual harness entry

@@ -6,6 +6,7 @@
   :serial t
   :components ((:file "src/package")
                (:file "src/backend")
+               (:file "src/logging")
                (:file "src/shell-tool")
                (:file "src/chat-session")
                (:file "src/main"))
@@ -19,7 +20,8 @@
                (:file "tests/openrouter-adapter")
                (:file "tests/tool-loop")
                (:file "tests/chat-session")
-               (:file "tests/shell-tool"))
+               (:file "tests/shell-tool")
+               (:file "tests/logging"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call :self-improving-agent-harness/tests :run-tests)))

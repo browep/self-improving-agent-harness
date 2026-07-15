@@ -21,8 +21,23 @@ sleep 30 | env \
   sbcl --noinform --load scripts/chat.lisp >"$output" 2>&1 &
 chat_pid=$!
 
-# Give SBCL time to load and block in READ-LINE, then simulate terminal Ctrl-C.
-sleep 1
+# Wait until the script has loaded and is blocked in READ-LINE before SIGINT.
+ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  if grep -F 'chat> ' "$output" >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  if ! kill -0 "$chat_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+if [ "$ready" = false ]; then
+  wait "$chat_pid" 2>/dev/null || true
+  printf '%s\n' 'Test failed: interactive chat never reached its prompt.' >&2
+  exit 1
+fi
 kill -INT "$chat_pid"
 
 exited=false

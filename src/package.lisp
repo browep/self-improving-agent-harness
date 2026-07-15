@@ -5,6 +5,8 @@
    #:backend-name
    #:complete
    #:run-tool-loop
+   #:configure-interaction-logging
+   #:log-interaction
    #:run-shell-tool
    #:chat-session
    #:make-chat-session

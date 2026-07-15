@@ -100,11 +100,11 @@ printf '%s' 'Summarize the repository.' | ./bin/chat
 
 The interactive process retains one ordered in-memory history: its system
 message, each completed user/assistant exchange, and tool-call/tool-result
-messages. Empty interactive input makes no provider request. A failed turn is
-reported on stderr without condition detail, leaves that history untouched, and
-the session continues; normal exit after any failed turn is non-zero. Final
-assistant content goes to stdout while tool and outcome diagnostics go to
-stderr. `--prompt` retains the existing one-shot exit behavior. Run
+messages. Empty interactive input makes no provider request. A failed turn prints its
+safe failure message on stderr, leaves that history untouched, and the session
+continues; normal exit after any failed turn is non-zero. Final assistant content
+goes to stdout while tool and outcome diagnostics go to stderr. `--prompt`
+retains the existing one-shot exit behavior. Run
 `./bin/chat --help` for defaults and requirements.
 
 See [`docs/runtime.md`](docs/runtime.md) for runtime guarantees and [`docs/initial-architecture.md`](docs/initial-architecture.md) for design questions.

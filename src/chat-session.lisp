@@ -35,26 +35,35 @@ well-defined request boundary."
 (defun chat-session-turn (session content)
   "Run one non-empty user turn and append its complete exchange to SESSION.
 
-Returns the final COMPLETION-RESPONSE.  Empty input is ignored and returns NIL
-without calling the backend.  Errors from a turn leave the previous history
-unchanged so the caller can safely continue the session."
+Returns the final COMPLETION-RESPONSE. Empty input is ignored and returns NIL
+without calling the backend. Errors leave the previous history unchanged and
+are recorded in the configured interaction log before being re-signaled."
   (when (and (stringp content) (plusp (length content)))
+    (log-interaction :info "turn-received" :content content)
     (let* ((messages (append (chat-session-history session)
                              (list (list :role "user" :content content))))
            (request (make-completion-request
                      :model (chat-session-model session)
                      :messages messages
                      :options (chat-session-options session))))
-      (multiple-value-bind (response continuation-history)
-          (run-tool-loop (chat-session-backend session)
-                         request
-                         (chat-session-handlers session)
-                         :max-rounds (chat-session-max-rounds session))
-        (setf (chat-session-history session)
-              (append continuation-history
-                      (list (list :role "assistant"
-                                  :content (completion-response-text response)))))
-        response))))
+      (handler-case
+          (multiple-value-bind (response continuation-history)
+              (run-tool-loop (chat-session-backend session)
+                             request
+                             (chat-session-handlers session)
+                             :max-rounds (chat-session-max-rounds session))
+            (setf (chat-session-history session)
+                  (append continuation-history
+                          (list (list :role "assistant"
+                                      :content (completion-response-text response)))))
+            (log-interaction :info "turn-completed"
+                             :model (completion-response-model response)
+                             :content (completion-response-text response))
+            response)
+        (error (condition)
+          (log-interaction :error "turn-failed"
+                           :message (princ-to-string condition))
+          (error condition))))))
 
 (defun note-chat-session-failure (session)
   "Mark SESSION as having a failed turn without retaining partial turn state."
