@@ -150,15 +150,16 @@ the transport layer owns conversion to OpenRouter's JSON field names."
         (yason:encode result stream))))
 
 (defun openrouter-assistant-tool-call-message (response)
-  (list :role "assistant"
-        :content (completion-response-text response)
-        :tool-calls
-        (mapcar (lambda (tool-call)
-                  (list :id (getf tool-call :id)
-                        :type (getf tool-call :type)
-                        :function (list :name (getf tool-call :name)
-                                        :arguments (getf tool-call :arguments))))
-                (completion-response-tool-calls response))))
+  (let ((text (completion-response-text response)))
+    (list :role "assistant"
+          :content (and (plusp (length text)) text)
+          :tool-calls
+          (mapcar (lambda (tool-call)
+                    (list :id (getf tool-call :id)
+                          :type (getf tool-call :type)
+                          :function (list :name (getf tool-call :name)
+                                          :arguments (getf tool-call :arguments))))
+                  (completion-response-tool-calls response)))))
 
 (defun openrouter-tool-arguments (tool-call)
   (handler-case

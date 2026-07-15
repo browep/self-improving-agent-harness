@@ -52,6 +52,8 @@
            (tool-message (third messages)))
       (ensure-equal "assistant" (getf assistant-message :role)
                     "continuation includes the assistant tool-call message")
+      (ensure-true (null (getf assistant-message :content))
+                   "tool-only assistant messages use OpenRouter's null content convention")
       (ensure-equal "call-123" (getf (first (getf assistant-message :tool-calls)) :id)
                     "continuation retains the provider tool-call ID")
       (ensure-equal "tool" (getf tool-message :role)
