@@ -4,6 +4,7 @@
   (let* ((headers (make-hash-table :test #'equal))
          (report-data
            (list :note "OPENROUTER_API_KEY=credential-value"
+                 :diagnostic "raw sensitive tool output embedded in free-form text"
                  :tool-output "raw sensitive tool output"
                  :usage (list :input-tokens 7 :output-tokens 3 :cost-usd 0.0025)
                  :headers headers)))
@@ -16,6 +17,8 @@
                    "redaction removes credential values in nested metadata")
       (ensure-true (not (search "raw sensitive tool output" json))
                    "redaction removes tool-output fields without relying on raw naming")
+      (ensure-true (not (search "free-form text" json))
+                   "redaction removes raw tool output embedded in free-form values")
       (ensure-true (search "\"input_tokens\":7" json)
                    "redaction retains input token accounting")
       (ensure-true (search "\"output_tokens\":3" json)

@@ -37,7 +37,10 @@
              (search "BEARER " text)
              (search "PASSWORD=" text)
              (search "CREDENTIAL=" text)
-             (search "SECRET=" text)))))
+             (search "SECRET=" text)
+             (and (search "RAW" text)
+                  (or (search "TOOL" text) (search "PROVIDER" text))
+                  (search "OUTPUT" text))))))
 
 (defun redact-report-data (value)
   "Return VALUE without credentials or raw tool/provider output.
