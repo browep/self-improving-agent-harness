@@ -35,10 +35,18 @@ sensitive task or tool data."
     (normalize-command-check
      (list :name (getf check :name) :exit-code exit-code))))
 
-(defun baseline-usage-within-budget-p (response budget)
-  (let ((total-tokens (getf (completion-response-usage response) :total-tokens)))
-    (or (null total-tokens)
-        (<= total-tokens (getf budget :max-total-tokens)))))
+(defun baseline-usage-within-budget-p (responses budget)
+  (let ((reported-token-usage
+          (loop for response in responses
+                for total-tokens =
+                  (getf (completion-response-usage response) :total-tokens)
+                when total-tokens sum total-tokens))
+        (reported-cost
+          (loop for response in responses
+                for cost-usd = (getf (completion-response-usage response) :cost-usd)
+                when cost-usd sum cost-usd)))
+    (and (<= reported-token-usage (getf budget :max-total-tokens))
+         (<= reported-cost (getf budget :max-cost-usd)))))
 
 (defun run-baseline-fixture (fixture backend budget)
   "Execute a versioned FIXTURE through BACKEND's existing tool-loop seam.
@@ -56,30 +64,31 @@ output."
     (error "Baseline fixture requires version, id, input, commands, and explicit budgets."))
   (let ((answer nil))
     (handler-case
-        (let* ((response
-                 (run-tool-loop
-                  backend
-                  (make-completion-request
-                   :model "baseline/scripted"
-                   :messages (list (list :role "user" :content (getf fixture :input))))
-                  `(("submit_candidate" .
-                     ,(lambda (arguments)
-                        (setf answer (gethash "answer" arguments))
-                        "candidate received")))
-                  :max-rounds (1- (getf budget :max-provider-calls))))
-               (checks (mapcar (lambda (check)
-                                 (run-baseline-command check answer
-                                                       (getf budget :max-wall-seconds)))
-                               (getf fixture :acceptance-commands)))
-               (evidence (mapcar (lambda (check) (getf check :evidence)) checks)))
-          (cond
-            ((not (baseline-usage-within-budget-p response budget))
-             (list :outcome :execution-failure
-                   :evidence '((:stage :budget :status :exceeded))))
-            ((some (lambda (check) (eq :fail (getf check :verdict))) checks)
-             (list :outcome :acceptance-failure :evidence evidence))
-            (t
-             (list :outcome :success :evidence evidence))))
+        (multiple-value-bind (response ignored-messages responses)
+            (run-tool-loop
+             backend
+             (make-completion-request
+              :model "baseline/scripted"
+              :messages (list (list :role "user" :content (getf fixture :input))))
+             `(("submit_candidate" .
+                ,(lambda (arguments)
+                   (setf answer (gethash "answer" arguments))
+                   "candidate received")))
+             :max-rounds (1- (getf budget :max-provider-calls)))
+          (declare (ignore response ignored-messages))
+          (let* ((checks (mapcar (lambda (check)
+                                   (run-baseline-command check answer
+                                                         (getf budget :max-wall-seconds)))
+                                 (getf fixture :acceptance-commands)))
+                 (evidence (mapcar (lambda (check) (getf check :evidence)) checks)))
+            (cond
+              ((not (baseline-usage-within-budget-p responses budget))
+               (list :outcome :execution-failure
+                     :evidence '((:stage :budget :status :exceeded))))
+              ((some (lambda (check) (eq :fail (getf check :verdict))) checks)
+               (list :outcome :acceptance-failure :evidence evidence))
+              (t
+               (list :outcome :success :evidence evidence)))))
       (error ()
         (list :outcome :execution-failure
               :evidence '((:stage :execution :status :failed)))))))

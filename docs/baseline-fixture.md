@@ -6,8 +6,8 @@ acceptance command, and declares the run budget:
 
 - `:max-wall-seconds` bounds every acceptance command;
 - `:max-provider-calls` bounds the backend/tool-loop path;
-- `:max-total-tokens` bounds reported completion usage when available; and
-- `:max-cost-usd` is explicit (the scripted path has zero cost).
+- `:max-total-tokens` bounds the aggregate reported completion usage across the tool loop; and
+- `:max-cost-usd` bounds the aggregate reported provider cost (the scripted path has zero cost).
 
 The fixture does not configure its evaluator.  `run-baseline-fixture` owns the
 deterministic command evaluator, so candidate configuration cannot replace its
