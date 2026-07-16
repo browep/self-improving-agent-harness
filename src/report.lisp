@@ -10,9 +10,15 @@
   (member name '("INPUT-TOKENS" "OUTPUT-TOKENS" "TOTAL-TOKENS" "COST-USD")
           :test #'string=))
 
+(defun report-budget-cap-key-p (name)
+  "Recognize explicit non-sensitive evaluator budget fields, not arbitrary token keys."
+  (member name '("MAX-WALL-SECONDS" "MAX-PROVIDER-CALLS" "MAX-TOTAL-TOKENS" "MAX-COST-USD")
+          :test #'string=))
+
 (defun sensitive-report-key-p (key)
   (let ((name (string-upcase (string key))))
-    (unless (report-accounting-key-p name)
+    (unless (or (report-accounting-key-p name)
+                (report-budget-cap-key-p name))
       (or (search "API_KEY" name)
           (search "API-KEY" name)
           (search "AUTHORIZATION" name)
@@ -160,6 +166,37 @@ credential nor raw output can enter JSON, HTML, or console summaries."
               (html-escape (getf decision :rationale)))
       (write-string "</body></html>" stream))))
 
+(defun render-configuration-comparison-html (report)
+  "Render persisted evaluator evidence for a baseline and configuration candidates."
+  (with-output-to-string (stream)
+    (write-string "<!doctype html><html><head><meta charset=\"utf-8\"><title>Configuration comparison</title><style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#18212f}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bcc7d6;padding:.45rem;text-align:left;vertical-align:top}th{background:#eef3f8}code{white-space:pre-wrap}</style></head><body>" stream)
+    (format stream "<h1>Baseline vs candidate comparison</h1><p>Experiment: <code>~A</code></p><p>Equal explicit budget caps: <code>~A</code></p>"
+            (html-escape (getf report :experiment-id))
+            (html-escape (report-value (getf report :budget))))
+    (write-string "<table><thead><tr><th>Role</th><th>Candidate / configuration hash</th><th>Parent</th><th>Outcome</th><th>Evaluator evidence</th><th>Actual accounting</th><th>Retention</th></tr></thead><tbody>" stream)
+    (let ((baseline (getf report :baseline)))
+      (format stream "<tr><td>Baseline</td><td><code>~A<br>~A</code></td><td><code>~A</code></td><td>~A</td><td><code>~A</code></td><td><code>~A</code></td><td>Control</td></tr>"
+              (html-escape (getf baseline :id))
+              (html-escape (getf baseline :configuration-hash))
+              (html-escape (getf baseline :parent-id))
+              (html-escape (getf report :baseline-outcome))
+              (html-escape (report-value (getf report :baseline-evaluation)))
+              (html-escape (report-value (getf report :baseline-accounting)))))
+    (dolist (entry (getf report :comparisons))
+      (let ((candidate (getf entry :candidate))
+            (decision (getf entry :decision)))
+        (format stream "<tr><td>Candidate</td><td><code>~A<br>~A<br>~A</code></td><td><code>~A</code></td><td>~A</td><td><code>~A</code></td><td><code>~A</code></td><td><strong>~A</strong><br>~A</td></tr>"
+                (html-escape (getf candidate :id))
+                (html-escape (getf candidate :configuration-hash))
+                (html-escape (report-value (getf candidate :configuration)))
+                (html-escape (getf candidate :parent-id))
+                (html-escape (getf entry :outcome))
+                (html-escape (report-value (getf entry :evaluation)))
+                (html-escape (report-value (getf entry :accounting)))
+                (html-escape (getf decision :action))
+                (html-escape (getf decision :rationale)))))
+    (write-string "</tbody></table><p>Retention is derived solely from the persisted deterministic evaluator results above; candidates do not self-evaluate or self-promote.</p></body></html>" stream)))
+
 (defun scripted-baseline-run-report (result)
   "Build one complete, versioned trace record from the offline scripted run."
   (list :schema-version +run-report-schema-version+
@@ -198,7 +235,9 @@ credential nor raw output can enter JSON, HTML, or console summaries."
       (write-string (report-json-string safe-report) stream))
     (with-open-file (stream html-path :direction :output :if-exists :supersede
                                       :if-does-not-exist :create :external-format :utf-8)
-      (write-string (render-run-report-html safe-report) stream))
+      (write-string (if (string= (getf safe-report :report-type) "configuration-comparison")
+                        (render-configuration-comparison-html safe-report)
+                        (render-run-report-html safe-report)) stream))
     (list :json-path json-path :html-path html-path)))
 
 (defun write-scripted-baseline-report (&optional (directory "reports/baseline-answer-v1/"))
@@ -223,3 +262,9 @@ credential nor raw output can enter JSON, HTML, or console summaries."
     (unless (eq :success (getf result :outcome))
       (error "Scripted baseline report requires a completed run."))
     (write-run-report-artifacts (scripted-baseline-run-report result) directory)))
+
+(defun write-configuration-comparison-report (record directory)
+  "Persist paired redacted JSON and HTML from one configuration comparison record."
+  (unless (string= (getf record :report-type) "configuration-comparison")
+    (error "Configuration comparison reports require a comparison record."))
+  (write-run-report-artifacts record directory))

@@ -45,8 +45,21 @@ sensitive task or tool data."
           (loop for response in responses
                 for cost-usd = (getf (completion-response-usage response) :cost-usd)
                 when cost-usd sum cost-usd)))
-    (and (<= reported-token-usage (getf budget :max-total-tokens))
+    (and (<= (length responses) (getf budget :max-provider-calls))
+         (<= reported-token-usage (getf budget :max-total-tokens))
          (<= reported-cost (getf budget :max-cost-usd)))))
+
+(defun baseline-actual-accounting (responses)
+  "Preserve actual provider-call, token, and cost facts for comparisons."
+  (list :provider-calls (length responses)
+        :total-tokens
+        (loop for response in responses
+              for total-tokens = (getf (completion-response-usage response) :total-tokens)
+              when total-tokens sum total-tokens)
+        :cost-usd
+        (loop for response in responses
+              for cost-usd = (getf (completion-response-usage response) :cost-usd)
+              when cost-usd sum cost-usd)))
 
 (defun run-baseline-fixture (fixture backend budget)
   "Execute a versioned FIXTURE through BACKEND's existing tool-loop seam.
@@ -76,7 +89,8 @@ output."
                    "candidate received")))
              :max-rounds (1- (getf budget :max-provider-calls)))
           (declare (ignore response ignored-messages))
-          (let* ((checks (mapcar (lambda (check)
+          (let* ((accounting (baseline-actual-accounting responses))
+                 (checks (mapcar (lambda (check)
                                    (run-baseline-command check answer
                                                          (getf budget :max-wall-seconds)))
                                  (getf fixture :acceptance-commands)))
@@ -84,11 +98,12 @@ output."
             (cond
               ((not (baseline-usage-within-budget-p responses budget))
                (list :outcome :execution-failure
+                     :accounting accounting
                      :evidence '((:stage :budget :status :exceeded))))
               ((some (lambda (check) (eq :fail (getf check :verdict))) checks)
-               (list :outcome :acceptance-failure :evidence evidence))
+               (list :outcome :acceptance-failure :accounting accounting :evidence evidence))
               (t
-               (list :outcome :success :evidence evidence)))))
+               (list :outcome :success :accounting accounting :evidence evidence)))))
       (error ()
         (list :outcome :execution-failure
               :evidence '((:stage :execution :status :failed)))))))

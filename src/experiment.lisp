@@ -51,7 +51,7 @@ arguments accepted by MAKE-EXPERIMENT."
 
 (defstruct (candidate
             (:constructor make-candidate
-                (&key id experiment-id parent-id configuration)))
+                (&key id experiment-id parent-id configuration configuration-hash)))
   "A named change/configuration considered by an EXPERIMENT.
 
 IDs are caller-supplied stable identifiers.  PARENT-ID records lineage without
@@ -59,7 +59,8 @@ coupling candidate creation to evaluation or promotion policy."
   id
   experiment-id
   parent-id
-  configuration)
+  configuration
+  configuration-hash)
 
 (defstruct (run-record
             (:constructor make-run-record
@@ -70,9 +71,9 @@ coupling candidate creation to evaluation or promotion policy."
 
 (defstruct (evaluation
             (:constructor make-evaluation
-                (&key candidate-id evaluator-id verdict evidence)))
+                (&key candidate-id evaluator-id verdict evidence outcome accounting)))
   "Evaluator-owned conclusion and evidence for a candidate."
-  candidate-id evaluator-id verdict evidence)
+  candidate-id evaluator-id verdict evidence outcome accounting)
 
 (defstruct (decision
             (:constructor make-decision
@@ -92,7 +93,8 @@ coupling candidate creation to evaluation or promotion policy."
   (make-candidate :id id
                   :experiment-id (experiment-id experiment)
                   :parent-id (and parent-candidate (candidate-id parent-candidate))
-                  :configuration configuration))
+                  :configuration configuration
+                  :configuration-hash (stable-configuration-hash configuration)))
 
 (defun serialize-domain-object (object)
   "Serialize a domain object to a versioned, provider-neutral plist.
@@ -112,7 +114,8 @@ inside fixtures, configurations, and evidence remain application-owned data."
                (list :type "candidate" :id (candidate-id object)
                      :experiment-id (candidate-experiment-id object)
                      :parent-id (candidate-parent-id object)
-                     :configuration (candidate-configuration object)))
+                     :configuration (candidate-configuration object)
+                     :configuration-hash (candidate-configuration-hash object)))
               (run-record
                (list :type "run-record" :id (run-record-id object)
                      :experiment-id (run-record-experiment-id object)
@@ -122,8 +125,10 @@ inside fixtures, configurations, and evidence remain application-owned data."
                      :usage (run-record-usage object) :cost (run-record-cost object)))
               (evaluation
                (list :type "evaluation" :candidate-id (evaluation-candidate-id object)
-                     :evaluator-id (evaluation-evaluator-id object) :verdict (evaluation-verdict object)
-                     :evidence (evaluation-evidence object)))
+                      :evaluator-id (evaluation-evaluator-id object) :verdict (evaluation-verdict object)
+                      :evidence (evaluation-evidence object)
+                      :outcome (evaluation-outcome object)
+                      :accounting (evaluation-accounting object)))
               (decision
                (list :type "decision" :candidate-id (decision-candidate-id object)
                      :action (decision-action object) :rationale (decision-rationale object)

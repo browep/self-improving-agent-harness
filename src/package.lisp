@@ -51,7 +51,14 @@
    #:candidate-experiment-id
    #:candidate-parent-id
    #:candidate-configuration
+   #:candidate-configuration-hash
    #:materialize-candidate
+   #:candidate-generator
+   #:deterministic-configuration-generator
+   #:generate-configuration-candidates
+   #:canonical-configuration
+   #:stable-configuration-hash
+   #:+configuration-candidate-dimensions+
    #:run-record
    #:make-run-record
    #:run-record-id
@@ -69,6 +76,8 @@
    #:evaluation-evaluator-id
    #:evaluation-verdict
    #:evaluation-evidence
+   #:evaluation-outcome
+   #:evaluation-accounting
    #:decision
    #:make-decision
    #:decision-candidate-id
@@ -79,9 +88,12 @@
    #:normalize-command-check
    #:run-baseline-fixture
    #:run-fixed-baseline
+   #:run-configuration-comparison
+   #:retention-decision-from-evaluations
    #:+run-report-schema-version+
    #:redact-report-data
    #:render-run-report-html
    #:write-run-report-artifacts
    #:write-scripted-baseline-report
+   #:write-configuration-comparison-report
    #:run-harness))

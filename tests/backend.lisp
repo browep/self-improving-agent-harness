@@ -4,6 +4,20 @@
   (unless value
     (error "Test failed: ~A" description)))
 
+(defparameter +test-suite-runners+
+  '(run-candidate-generation-tests run-configuration-comparison-tests)
+  "Configuration-comparison test suites invoked by RUN-TESTS, in execution order.")
+
+(defun run-configuration-test-suites ()
+  (dolist (suite +test-suite-runners+)
+    (funcall suite)
+    (format t "~A passed.~%" suite)))
+
+(defun run-runner-wiring-tests ()
+  (dolist (suite '(run-candidate-generation-tests run-configuration-comparison-tests))
+    (ensure-true (member suite +test-suite-runners+)
+                 "run-tests explicitly invokes each configuration-comparison suite")))
+
 (defun run-tests ()
   (let ((backend (make-openrouter-backend :api-key "test-key"))
         (request (make-completion-request
@@ -36,6 +50,8 @@
       (run-shell-tool-tests)
       (run-logging-tests)
       (run-experiment-model-tests)
+      (run-runner-wiring-tests)
+      (run-configuration-test-suites)
       (run-baseline-tests)
       (run-report-tests)
       (format t "Self-improving-agent-harness smoke tests passed.~%")

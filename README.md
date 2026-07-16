@@ -89,6 +89,30 @@ self-contained and places selected/available models before invoked attempts;
 invocations are rendered as a table. Credentials and raw tool/provider output
 are excluded while input/output token and actual cost accounting is retained.
 
+## Configuration candidates and baseline comparison
+
+Issue #14 adds a provider-neutral `candidate-generator` protocol and a
+deterministic generator for explicit mutation spaces. The initial configuration
+dimensions are model ID, prompt-template version, max rounds, and tool/workflow
+strategy. Generated candidates have canonical configurations, portable stable
+configuration hashes, and baseline parent lineage.
+
+Run the checked-in, no-provider comparison in Docker:
+
+```bash
+sg docker -c 'make configuration-comparison'
+```
+
+This evaluates the baseline and two scripted configuration candidates under the
+same wall-time, provider-call, total-token, and cost caps. It writes
+`reports/configuration-comparison-v1/run.json` and
+`reports/configuration-comparison-v1/run.html`. The paired artifacts share one
+redacted record containing baseline/candidate evaluator evidence, actual
+provider-call/token/cost accounting, outcomes, configuration hashes and lineage,
+and retention rationale. Retention is replayed solely from persisted evaluator
+verdicts: the scripted regression is rejected, without candidate self-assessment
+or self-promotion.
+
 ## Docker-first runtime
 
 **Docker is the required Common Lisp runtime.** Do not install or invoke a host Lisp implementation for project code, tests, or harness runs. The project image provides SBCL and ASDF; the repository source is mounted read-only by default, and compiled artifacts live in a named Docker volume. `bin/chat` deliberately mounts its workspace read-write so its `run_shell` tool can make requested workspace changes.
