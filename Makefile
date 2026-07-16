@@ -1,6 +1,6 @@
 # Docker-first Common Lisp workflow. No host Lisp runtime is required.
 
-.PHONY: image test run live-smoke live-tool-smoke chat repl clean
+.PHONY: image test run experiment-example live-smoke live-tool-smoke chat repl clean
 
 image:
 	docker build --tag self-improving-agent-harness:dev .
@@ -10,6 +10,9 @@ test:
 
 run:
 	./bin/run
+
+experiment-example:
+	./bin/experiment-example
 
 live-smoke:
 	./bin/live-smoke

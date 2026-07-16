@@ -32,4 +32,48 @@
    #:make-openrouter-backend
    #:openrouter-backend-base-url
    #:openrouter-backend-api-key
+   #:experiment
+   #:make-experiment
+   #:experiment-id
+   #:experiment-task-fixture
+   #:experiment-acceptance-criteria
+   #:experiment-agent-configuration
+   #:experiment-evaluator
+   #:experiment-budget
+   #:validate-experiment
+   #:register-experiment
+   #:find-experiment
+   #:defexperiment
+   #:+experiment-schema-version+
+   #:candidate
+   #:make-candidate
+   #:candidate-id
+   #:candidate-experiment-id
+   #:candidate-parent-id
+   #:candidate-configuration
+   #:materialize-candidate
+   #:run-record
+   #:make-run-record
+   #:run-record-id
+   #:run-record-experiment-id
+   #:run-record-candidate-id
+   #:run-record-started-at
+   #:run-record-finished-at
+   #:run-record-outcome
+   #:run-record-trace-reference
+   #:run-record-usage
+   #:run-record-cost
+   #:evaluation
+   #:make-evaluation
+   #:evaluation-candidate-id
+   #:evaluation-evaluator-id
+   #:evaluation-verdict
+   #:evaluation-evidence
+   #:decision
+   #:make-decision
+   #:decision-candidate-id
+   #:decision-action
+   #:decision-rationale
+   #:decision-evaluation-reference
+   #:serialize-domain-object
    #:run-harness))

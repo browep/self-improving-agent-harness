@@ -34,6 +34,21 @@ OpenRouter's non-streaming Chat Completions API with runtime API-key
 authentication. Persistence, tool execution, and the evaluation loop remain
 separate workstreams.
 
+## Experiment DSL and lineage
+
+The first-class experiment model in `src/experiment.lisp` provides versioned,
+provider-neutral specifications for experiments, candidates, run records,
+evaluations, and decisions. `defexperiment` validates and registers complete
+declarations without executing a provider. See
+[`docs/experiment-model.md`](docs/experiment-model.md) for the public data
+model, extension points, and serialization contract.
+
+Run the checked-in, no-provider DSL example in Docker with networking disabled:
+
+```bash
+make experiment-example
+```
+
 ## Docker-first runtime
 
 **Docker is the required Common Lisp runtime.** Do not install or invoke a host Lisp implementation for project code, tests, or harness runs. The project image provides SBCL and ASDF; the repository source is mounted read-only by default, and compiled artifacts live in a named Docker volume. `bin/chat` deliberately mounts its workspace read-write so its `run_shell` tool can make requested workspace changes.
