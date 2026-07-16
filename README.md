@@ -49,6 +49,27 @@ Run the checked-in, no-provider DSL example in Docker with networking disabled:
 make experiment-example
 ```
 
+## Baseline fixture and deterministic evaluation
+
+Issue #12 adds a checked-in, versioned fixture at
+[`fixtures/baseline-answer-v1.lisp`](fixtures/baseline-answer-v1.lisp).  It has
+an explicit task input, acceptance command, and all wall-time, provider-call,
+token, and cost limits.  The fixed offline candidate passes through the existing
+backend/tool-loop seam, then the evaluator runs the fixture command with a
+bounded timeout.  Its evidence retains only check name, pass/fail status, and
+exit code—never candidate or command output.
+
+Run it without credentials or network access:
+
+```bash
+sg docker -c 'make baseline'
+```
+
+A result is `:success`, `:acceptance-failure` (the candidate ran but an
+acceptance command failed), or `:execution-failure` (backend/tool-loop,
+budget, or evaluator execution failed).  See
+[`docs/baseline-fixture.md`](docs/baseline-fixture.md) for the rerun contract.
+
 ## Docker-first runtime
 
 **Docker is the required Common Lisp runtime.** Do not install or invoke a host Lisp implementation for project code, tests, or harness runs. The project image provides SBCL and ASDF; the repository source is mounted read-only by default, and compiled artifacts live in a named Docker volume. `bin/chat` deliberately mounts its workspace read-write so its `run_shell` tool can make requested workspace changes.

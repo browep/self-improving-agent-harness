@@ -76,4 +76,7 @@
    #:decision-rationale
    #:decision-evaluation-reference
    #:serialize-domain-object
+   #:normalize-command-check
+   #:run-baseline-fixture
+   #:run-fixed-baseline
    #:run-harness))

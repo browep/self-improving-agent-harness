@@ -10,6 +10,7 @@
                (:file "src/shell-tool")
                (:file "src/chat-session")
                (:file "src/experiment")
+               (:file "src/evaluator")
                (:file "src/main"))
   :in-order-to ((test-op (test-op "self-improving-agent-harness/tests"))))
 
@@ -23,7 +24,8 @@
                (:file "tests/chat-session")
                (:file "tests/shell-tool")
                (:file "tests/logging")
-               (:file "tests/experiment"))
+               (:file "tests/experiment")
+               (:file "tests/baseline"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call :self-improving-agent-harness/tests :run-tests)))

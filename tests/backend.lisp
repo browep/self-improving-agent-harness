@@ -36,5 +36,6 @@
       (run-shell-tool-tests)
       (run-logging-tests)
       (run-experiment-model-tests)
+      (run-baseline-tests)
       (format t "Self-improving-agent-harness smoke tests passed.~%")
       t))
