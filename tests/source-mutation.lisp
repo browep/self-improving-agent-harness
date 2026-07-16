@@ -21,13 +21,13 @@
                  "a structured named-function mutation replaces only the fixture body")
     (ensure-true (not (search "(+ VALUE 1)" candidate-source))
                  "the original fixture body is absent after application"))
-  (handler-case
-      (progn
+  (let ((rejected nil))
+    (handler-case
         (validate-source-mutation
          '(:operation :replace-function-body :target "fixture-score" :body "not-a-form"))
-        (error "Test failed: invalid mutation must be rejected before execution"))
-    (error ()
-      (ensure-true t "invalid structured transformations reject before execution")))
+      (error () (setf rejected t)))
+    (ensure-true rejected
+                 "invalid structured transformations reject before execution"))
   (let* ((directory (merge-pathnames "source-mutation-test/" (uiop:temporary-directory)))
          (result (run-source-mutation-prototype directory)))
     (unwind-protect
