@@ -5,7 +5,8 @@
 
 (defstruct (chat-session
             (:constructor %make-chat-session
-                (&key backend model options handlers max-rounds history failed-turn-p)))
+                (&key backend model options handlers max-rounds history failed-turn-p
+                      last-provider-responses last-accounting)))
   "Persistent, in-memory state for one interactive chat process.
 
 HISTORY contains the initial system message followed by every completed user
@@ -18,7 +19,11 @@ well-defined request boundary."
   handlers
   max-rounds
   history
-  failed-turn-p)
+  failed-turn-p
+  ;; Kept only in session memory so callers can audit an ordered successful turn.
+  ;; Reports consume LAST-ACCOUNTING, never these raw-capable response objects.
+  last-provider-responses
+  last-accounting)
 
 (defun make-chat-session (&key backend model options handlers (max-rounds 8)
                             (system-prompt +chat-system-prompt+))
@@ -47,7 +52,7 @@ are recorded in the configured interaction log before being re-signaled."
                      :messages messages
                      :options (chat-session-options session))))
       (handler-case
-          (multiple-value-bind (response continuation-history)
+          (multiple-value-bind (response continuation-history provider-responses)
               (run-tool-loop (chat-session-backend session)
                              request
                              (chat-session-handlers session)
@@ -56,6 +61,10 @@ are recorded in the configured interaction log before being re-signaled."
                   (append continuation-history
                           (list (list :role "assistant"
                                       :content (completion-response-text response)))))
+            (setf (chat-session-last-provider-responses session) provider-responses
+                  (chat-session-last-accounting session)
+                  (provider-accounting-summary (chat-session-backend session)
+                                               provider-responses))
             (log-interaction :info "turn-completed"
                              :model (completion-response-model response)
                              :content (completion-response-text response))

@@ -54,7 +54,9 @@ else:
     assert result["git"]["diff_check"] == "passed", result
     assert result["git"]["diff_check_exit_code"] == 0, result
 assert result["verification"] == {"command": "/bin/true", "status": "passed", "exit_code": 0}, result
-assert result["provider_usage"] == "unavailable", result
+assert result["provider_accounting"]["state"] == "actual", result
+assert result["provider_accounting"]["aggregate"]["cost_usd"] == 0, result
+assert result["provider_accounting"]["invocations"][0]["request_id_present"] is True, result
 assert "chat.log" not in "\n".join(map(json.dumps, records)), records
 PY
 

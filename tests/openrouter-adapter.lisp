@@ -40,7 +40,8 @@
                              (cons "choices" (list raw-choice))
                              (cons "usage" (list (cons "prompt_tokens" 10)
                                                  (cons "completion_tokens" 5)
-                                                 (cons "total_tokens" 15)))))
+                                                 (cons "total_tokens" 15)
+                                                 (cons "cost" 0.0025)))))
          (response (self-improving-agent-harness::openrouter-response-from-json
                     raw-response)))
     (ensure-equal "" (completion-response-text response)
@@ -55,14 +56,35 @@
                   (self-improving-agent-harness:completion-response-provider-request-id
                    response)
                   "response parser retains the provider request ID")
-    (ensure-equal '(:prompt-tokens 10 :completion-tokens 5 :total-tokens 15)
+    (ensure-equal '(:prompt-tokens 10 :completion-tokens 5 :total-tokens 15
+                    :cost-usd 0.0025)
                   (self-improving-agent-harness:completion-response-usage response)
-                  "response parser normalizes usage")
+                  "response parser normalizes token usage and authoritative provider cost")
     (ensure-equal '(:id "call-123" :type "function" :name "echo"
                     :arguments "json-arguments")
                   (first (self-improving-agent-harness:completion-response-tool-calls
                           response))
                   "response parser normalizes tool calls"))
+  (flet ((normalized-usage-for-cost (cost-marker)
+           (let* ((usage (if (eq cost-marker :absent)
+                             '(("prompt_tokens" . 4) ("completion_tokens" . 2)
+                               ("total_tokens" . 6))
+                             `(("prompt_tokens" . 4) ("completion_tokens" . 2)
+                               ("total_tokens" . 6) ("cost" . ,cost-marker))))
+                  (raw-response `(("id" . "cost-test") ("model" . "test/model")
+                                  ("choices" . ((("message" . (("content" . "ok")))) ) )
+                                  ("usage" . ,usage))))
+             (completion-response-usage
+              (self-improving-agent-harness::openrouter-response-from-json raw-response)))))
+    (ensure-equal 0 (getf (normalized-usage-for-cost 0) :cost-usd)
+                  "response parser preserves an authoritative zero provider cost")
+    (ensure-true (not (member :cost-usd (normalized-usage-for-cost :absent)))
+                 "response parser marks absent provider cost by omitting cost-usd")
+    (ensure-true (not (member :cost-usd (normalized-usage-for-cost "0.0025")))
+                 "response parser rejects string provider cost as non-authoritative")
+    (ensure-equal '(:prompt-tokens 4 :completion-tokens 2 :total-tokens 6)
+                  (normalized-usage-for-cost :absent)
+                  "response parser retains supplied token fields when cost is absent"))
   (let* ((request (make-completion-request
                    :model "openai/gpt-4.1-mini"
                    :messages '((:role "system" :content "Be concise.")

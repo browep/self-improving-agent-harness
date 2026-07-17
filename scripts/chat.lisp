@@ -28,7 +28,9 @@
   "Deterministic offline backend used only by the supervised integration test path."
   (self-improving-agent-harness:make-completion-response
    :text (format nil "fake assistant turn ~D" (incf (fake-chat-turn-count backend)))
-   :model (self-improving-agent-harness:completion-request-model request)))
+   :model (self-improving-agent-harness:completion-request-model request)
+   :provider-request-id (format nil "fake-request-~D" (fake-chat-turn-count backend))
+   :usage '(:prompt-tokens 2 :completion-tokens 1 :total-tokens 3 :cost-usd 0)))
 
 (defun make-chat-backend ()
   (if (string= (or (uiop:getenv "HARNESS_CHAT_FAKE_BACKEND") "") "1")
@@ -110,6 +112,7 @@
                                    (self-improving-agent-harness:emit-chat-event
                                     "turn-completed"
                                     :model (self-improving-agent-harness:completion-response-model response)
+                                    :accounting (self-improving-agent-harness:chat-session-last-accounting session)
                                     :assistant-bytes
                                     (length (sb-ext:string-to-octets assistant-text
                                                                      :external-format :utf-8))))

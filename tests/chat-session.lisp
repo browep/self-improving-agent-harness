@@ -34,9 +34,15 @@
            (make-completion-response
             :text ""
             :model "test/model"
+            :provider-request-id "provider-tool-1"
+            :raw '(:provider-body "provider secret" :tool-output "tool input")
+            :usage '(:prompt-tokens 2 :completion-tokens 1 :total-tokens 3 :cost-usd 0.001)
             :tool-calls '((:id "call-session" :type "function" :name "echo"
                            :arguments "{\"message\":\"tool input\"}"))))
-         (final-response (make-completion-response :text "tool answer" :model "test/model"))
+         (final-response (make-completion-response :text "tool answer" :model "test/model"
+                                                   :provider-request-id "provider-tool-2"
+                                                   :usage '(:prompt-tokens 3 :completion-tokens 1
+                                                            :total-tokens 4 :cost-usd 0.002)))
          (backend (make-instance 'scripted-backend :name "scripted"
                                  :responses (list tool-response final-response)))
          (session (make-chat-session
@@ -52,7 +58,30 @@
       (ensure-equal "call-session" (getf (fourth history) :tool-call-id)
                     "interactive tool result stays linked to its tool call")
       (ensure-equal "tool answer" (getf (fifth history) :content)
-                    "interactive history retains the final tool-turn response")))
+                    "interactive history retains the final tool-turn response")
+      (ensure-equal 2 (length (chat-session-last-provider-responses session))
+                    "a successful tool turn retains every provider response in order")
+      (let ((accounting (chat-session-last-accounting session)))
+        (ensure-equal 2 (getf accounting :provider-call-count)
+                      "accounting includes every tool-loop provider call")
+        (ensure-equal 7 (getf (getf accounting :aggregate) :total-tokens)
+                      "accounting sums authoritative token totals across tool-loop calls")
+        (ensure-equal 0.003 (getf (getf accounting :aggregate) :cost-usd)
+                      "accounting sums cost only when each tool-loop call supplied it")
+        (ensure-true (not (search "tool input" (prin1-to-string accounting)))
+                     "sanitized accounting does not expose tool arguments or output"))))
+  (let* ((backend (make-instance 'scripted-backend :name "scripted" :responses '()))
+         (partial (self-improving-agent-harness::provider-accounting-summary
+                   backend
+                   (list (make-completion-response :model "test/model"
+                                                   :usage '(:total-tokens 2 :cost-usd 0.001))
+                         (make-completion-response :model "test/model"
+                                                   :usage '(:total-tokens 3))))))
+    (ensure-equal :unavailable (getf (getf partial :aggregate) :cost-usd)
+                  "a missing tool-loop cost makes aggregate cost unavailable rather than partial")
+    (ensure-equal "one-or-more-invocations-missing-authoritative-cost"
+                  (getf (getf partial :aggregate) :cost-usd-reason)
+                  "unavailable aggregate cost carries a deterministic reason"))
   (let* ((backend (make-instance 'scripted-backend :name "scripted" :responses '()))
          (session (make-chat-session :backend backend :model "test/model" :handlers '())))
     (note-chat-session-failure session)

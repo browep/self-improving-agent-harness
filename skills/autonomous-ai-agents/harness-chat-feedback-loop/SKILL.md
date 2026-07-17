@@ -110,8 +110,17 @@ never paths, diff/log/command/provider/tool output, prompts, or credentials.
 
 Normal exit writes paired `session.json` and self-contained `session.html` from
 the same sanitized in-memory record in the explicit ignored report directory;
-the final JSONL event reports both paths. Provider accounting is explicitly
-unavailable unless an authoritative integration provides it. Decision remains
+the final JSONL event reports both paths. OpenRouter `usage.cost` is actual only
+when provider-returned as a numeric value (including zero). Every successful
+tool-loop completion is retained in ordered in-memory response state and the
+report receives only an allow-listed invocation/accounting trace: model,
+provider, request-ID presence, outcome, input/output/total tokens, and cost
+state. Aggregate cost/tokens are actual only when every included response
+supplied that numeric field; otherwise they are unavailable with a reason and
+partial cost is never summed. Do not use model-list pricing as actual accounting.
+Reports never copy raw provider payloads, requests, tool output, or secrets.
+OpenRouter semantics: [Querying Cost and Stats](https://openrouter.ai/docs/api-reference/overview#querying-cost-and-stats) and [OpenAPI](https://openrouter.ai/openapi.json).
+Decision remains
 `unresolved` without an external `--decision`; no artifact means full
 experiment promotion. See `docs/chat-supervisor-protocol.md` for exact limits
 and the invocation example.

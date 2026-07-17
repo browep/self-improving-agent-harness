@@ -67,3 +67,20 @@ their values. Decision is
 or `--decision reject`. The artifacts are under ignored `reports/`; paths are
 reported in the final event. The supervisor does not claim provider cost, full
 experiment promotion, or a worker self-assessment as evidence.
+
+## Authoritative provider accounting
+
+OpenRouter completion `usage.cost` is actual cost only when the provider returns
+a JSON number (including `0`); missing, string, or invalid values are explicitly
+unavailable and are never estimated. Every successful tool-loop completion is
+represented in ordered allow-listed invocation lineage: model, provider,
+request-ID presence, outcome, input/output/total tokens, and cost state.
+
+Aggregate tokens and cost are actual only if every included invocation supplied
+the respective numeric field. A missing/invalid cost makes aggregate `cost-usd`
+unavailable with a reason; no partial cost is summed. Reports contain this narrow
+summary only, never raw provider bodies, request messages, tool arguments/results,
+assistant text, or secrets. Model-list pricing is catalog pricing, not actual
+per-request accounting and is never a fallback.
+
+See OpenRouter API Reference, [Querying Cost and Stats](https://openrouter.ai/docs/api-reference/overview#querying-cost-and-stats), and the [OpenRouter OpenAPI specification](https://openrouter.ai/openapi.json).

@@ -122,10 +122,13 @@ the transport layer owns conversion to OpenRouter's JSON field names."
                           (openrouter-json-field message "tool_calls")))
      :finish-reason (openrouter-json-field choice "finish_reason")
      :provider-request-id (openrouter-json-field raw-response "id")
-     :usage (list :prompt-tokens (openrouter-json-field usage "prompt_tokens")
-                  :completion-tokens
-                  (openrouter-json-field usage "completion_tokens")
-                  :total-tokens (openrouter-json-field usage "total_tokens")))))
+     :usage (append
+             (list :prompt-tokens (openrouter-json-field usage "prompt_tokens")
+                   :completion-tokens
+                   (openrouter-json-field usage "completion_tokens")
+                   :total-tokens (openrouter-json-field usage "total_tokens"))
+             (let ((cost (openrouter-json-field usage "cost")))
+               (if (realp cost) (list :cost-usd cost) '()))))))
 
 (defun openrouter-completions-url (backend)
   (format nil "~A/chat/completions"
@@ -181,6 +184,73 @@ the transport layer owns conversion to OpenRouter's JSON field names."
       (list :role "tool"
             :tool-call-id (getf tool-call :id)
             :content (openrouter-tool-result-content result)))))
+
+(defun response-accounting-value (response usage-key)
+  "Return USAGE-KEY only when this response supplies a numeric actual value."
+  (let ((value (getf (completion-response-usage response) usage-key)))
+    (and (realp value) value)))
+
+(defun aggregate-response-accounting (responses usage-key unavailable-reason)
+  "Aggregate USAGE-KEY only if every response supplies an actual numeric value."
+  (let ((values (mapcar (lambda (response)
+                          (response-accounting-value response usage-key))
+                        responses)))
+    (if (every #'realp values)
+        (values (reduce #'+ values :initial-value 0) "actual" nil)
+        (values :unavailable "unavailable" unavailable-reason))))
+
+(defun provider-accounting-summary (backend responses)
+  "Return an allow-listed accounting trace for ordered successful RESPONSES.
+
+The trace intentionally contains no raw payload, request messages, tool calls, or
+assistant/tool content. Cost totals are actual only when every provider response
+includes a numeric usage.cost value; partial cost is never summed."
+  (let ((invocations
+          (mapcar
+           (lambda (response)
+             (multiple-value-bind (input input-state input-reason)
+                 (aggregate-response-accounting (list response) :prompt-tokens
+                                               "provider-did-not-supply-input-tokens")
+               (multiple-value-bind (output output-state output-reason)
+                   (aggregate-response-accounting (list response) :completion-tokens
+                                                 "provider-did-not-supply-output-tokens")
+                 (multiple-value-bind (total total-state total-reason)
+                     (aggregate-response-accounting (list response) :total-tokens
+                                                   "provider-did-not-supply-total-tokens")
+                   (multiple-value-bind (cost cost-state cost-reason)
+                       (aggregate-response-accounting (list response) :cost-usd
+                                                     "provider-did-not-supply-authoritative-cost")
+                     (list :model (or (completion-response-model response) "unavailable")
+                           :provider (backend-name backend)
+                           :request-id-present (not (null (completion-response-provider-request-id response)))
+                           :outcome "completed"
+                           :input-tokens input :input-tokens-state input-state :input-tokens-reason input-reason
+                           :output-tokens output :output-tokens-state output-state :output-tokens-reason output-reason
+                           :total-tokens total :total-tokens-state total-state :total-tokens-reason total-reason
+                           :cost-usd cost :cost-usd-state cost-state :cost-usd-reason cost-reason))))))
+           responses)))
+    (multiple-value-bind (input input-state input-reason)
+        (aggregate-response-accounting responses :prompt-tokens
+                                      "one-or-more-invocations-missing-input-tokens")
+      (multiple-value-bind (output output-state output-reason)
+          (aggregate-response-accounting responses :completion-tokens
+                                        "one-or-more-invocations-missing-output-tokens")
+        (multiple-value-bind (total total-state total-reason)
+            (aggregate-response-accounting responses :total-tokens
+                                          "one-or-more-invocations-missing-total-tokens")
+          (multiple-value-bind (cost cost-state cost-reason)
+              (aggregate-response-accounting responses :cost-usd
+                                            "one-or-more-invocations-missing-authoritative-cost")
+            (list :provider-call-count (length responses)
+                  :invocations invocations
+                  :aggregate (list :input-tokens input :input-tokens-state input-state
+                                   :input-tokens-reason input-reason
+                                   :output-tokens output :output-tokens-state output-state
+                                   :output-tokens-reason output-reason
+                                   :total-tokens total :total-tokens-state total-state
+                                   :total-tokens-reason total-reason
+                                   :cost-usd cost :cost-usd-state cost-state
+                                   :cost-usd-reason cost-reason))))))))
 
 (defun run-tool-loop (backend request handlers &key (max-rounds 8))
   "Run REQUEST through BACKEND, executing registered tool calls until completion.

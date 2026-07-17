@@ -12,6 +12,8 @@
    #:chat-session
    #:make-chat-session
    #:chat-session-history
+   #:chat-session-last-provider-responses
+   #:chat-session-last-accounting
    #:chat-session-turn
    #:chat-session-failed-turn-p
    #:note-chat-session-failure
