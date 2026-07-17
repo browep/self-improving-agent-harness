@@ -171,11 +171,10 @@ For each turn, the supervisor must:
 2. Capture final assistant text from stdout and `TOOL_CALL` / `OUTCOME` events
    from stderr.
 3. Record the current JSONL log location only as supporting diagnostics. The
-   current `chat.log` is append-only and shared across sessions; it logs raw user
-   prompts, assistant content, shell commands, and failure messages. It omits raw
-   successful tool output but is **not** a uniformly redacted session transcript.
-   Minimize sensitive prompts/commands and never copy unreviewed log content into
-   an evaluator report.
+   append-only shared `chat.log` retains lifecycle and allow-listed metadata only;
+   prompts, assistant content, shell commands/results, and arbitrary failure
+   details are excluded. It is not a complete session transcript. Never copy log
+   content blindly into an evaluator report.
 4. Snapshot the worktree after the turn:
 
    ```sh
@@ -253,10 +252,10 @@ Persist a report with at least:
 - final candidate decision and rationale.
 
 The supervisor's persisted report must never include `OPENROUTER_API_KEY`,
-credentials, raw tool/provider output, or other secret-bearing material. Review
-and redact console/log excerpts before persistence; existing `chat.log` content
-is diagnostic input, not pre-sanitized evidence. Preserve usage and cost
-accounting when authoritative values are available.
+credentials, raw tool/provider output, or other secret-bearing material. The
+shared `chat.log` is metadata-only rather than a complete transcript, but treat
+console/log excerpts as diagnostic input and review them before persistence.
+Preserve usage and cost accounting when authoritative values are available.
 
 ## Common Pitfalls
 

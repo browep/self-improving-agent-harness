@@ -27,8 +27,29 @@
               (finish-output stream))
             path))))
 
+(defun safe-interaction-label-p (value)
+  "True when VALUE is a compact non-secret diagnostic label."
+  (and (stringp value) (plusp (length value)) (<= (length value) 160)
+       (every (lambda (character)
+                (or (alphanumericp character)
+                    (find character "._/-")))
+              value)))
+
+(defun safe-interaction-log-fields (fields)
+  "Return only allow-listed non-content fields for a durable diagnostic log.
+
+User prompts, assistant text, tool commands/results, and arbitrary failures can
+contain credentials or private repository data, so they never enter chat.log."
+  (loop for (key value) on fields by #'cddr
+        when (or (and (member key '(:model :mode :tool :reason) :test #'eq)
+                      (safe-interaction-label-p value))
+                 (and (member key '(:max-rounds :output-length :exit-status) :test #'eq)
+                      (integerp value))
+                 (and (eq key :failed-turn-p) (typep value 'boolean)))
+          append (list key value)))
+
 (defun log-interaction (level event &rest fields)
-  "Append one UTF-8 JSON-lines interaction event when logging is configured."
+  "Append one sanitized UTF-8 JSON-lines interaction event when logging is configured."
   (when *interaction-log-path*
     (with-open-file (stream *interaction-log-path* :direction :output
                             :if-does-not-exist :create :if-exists :append
@@ -41,7 +62,7 @@
                                (list :session-id *interaction-session-id*))
                              (when *interaction-turn-number*
                                (list :turn *interaction-turn-number*))
-                             fields))
+                             (safe-interaction-log-fields fields)))
                     stream)
       (terpri stream)
       (finish-output stream))))

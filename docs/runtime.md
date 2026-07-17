@@ -45,13 +45,13 @@ final evidence, never as normal CI coverage.
 
 Every `bin/container` run mounts the named Docker volume
 `self-improving-agent-harness-logs` at `/logs`. `bin/chat` appends UTF-8 JSON
-lines to `/logs/chat.log` for session lifecycle, user turns, completed assistant
-turns, tool invocations, and safe failure messages. A nonzero `run_shell`
-command is returned to the model as a tool result with its exit status and
-combined output, so the model can explain or correct it without aborting the
-turn. It does not log the
-OpenRouter API key or raw tool output, but prompts, assistant responses, and
-tool commands can themselves be sensitive.
+lines to `/logs/chat.log` for lifecycle and allow-listed metadata only:
+session/turn IDs, compact model/mode/tool/reason labels, and numeric bounds or
+exit-status metadata. Prompts, assistant text, tool commands/results, and
+arbitrary failure details are excluded because they can contain credentials or
+private repository data. A nonzero `run_shell` command is still returned to the
+model as a tool result with its exit status and combined output, so the model can
+explain or correct it without aborting the turn.
 
 ## Chat session correlation events
 
@@ -79,8 +79,8 @@ It is a framing invariant, not an estimate or character count.
 
 The shared append-only `chat.log` is diagnostic data, not a per-session
 transcript. Its chat interaction records include the available `session_id` and
-`turn` context. It does not record credentials or raw successful tool output,
-but prompts, assistant text, commands, and failures can still be sensitive.
+`turn` context plus only allow-listed metadata. It excludes credentials, prompts,
+assistant text, commands, tool results, and arbitrary failure details.
 
 ## Supervised JSONL slice
 
