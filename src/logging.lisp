@@ -3,6 +3,12 @@
 (defparameter *interaction-log-path* nil
   "Path to the append-only JSON-lines interaction log, or NIL when disabled.")
 
+(defvar *interaction-session-id* nil
+  "Dynamically bound non-secret correlation ID for interaction diagnostics.")
+
+(defvar *interaction-turn-number* nil
+  "Dynamically bound one-based submitted-turn number for interaction diagnostics.")
+
 (defun interaction-log-timestamp ()
   (multiple-value-bind (second minute hour day month year)
       (decode-universal-time (get-universal-time) 0)
@@ -31,7 +37,30 @@
                      (append (list :timestamp (interaction-log-timestamp)
                                    :level (string-downcase (symbol-name level))
                                    :event event)
+                             (when *interaction-session-id*
+                               (list :session-id *interaction-session-id*))
+                             (when *interaction-turn-number*
+                               (list :turn *interaction-turn-number*))
                              fields))
                     stream)
       (terpri stream)
       (finish-output stream))))
+
+(defun emit-chat-event (event &rest fields)
+  "Write one machine-parseable JSONL chat-boundary event to standard error.
+
+The caller supplies lifecycle or turn EVENT fields.  Dynamically bound session
+and turn correlation context is included without putting assistant text on
+stderr."
+  (fresh-line *error-output*)
+  (yason:encode
+   (openrouter-json-value
+    (append (list :event event)
+            (when *interaction-session-id*
+              (list :session-id *interaction-session-id*))
+            (when *interaction-turn-number*
+              (list :turn *interaction-turn-number*))
+            fields))
+   *error-output*)
+  (terpri *error-output*)
+  (finish-output *error-output*))

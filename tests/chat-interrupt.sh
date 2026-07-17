@@ -18,6 +18,7 @@ sleep 30 | env \
   HARNESS_CHAT_MODE=interactive \
   HARNESS_CHAT_MODEL=test/model \
   HARNESS_CHAT_MAX_ROUNDS=1 \
+  HARNESS_CHAT_SESSION_ID=interrupt-session-test \
   sbcl --noinform --load scripts/chat.lisp >"$output" 2>&1 &
 chat_pid=$!
 

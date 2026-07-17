@@ -7,6 +7,7 @@
    #:run-tool-loop
    #:configure-interaction-logging
    #:log-interaction
+   #:emit-chat-event
    #:run-shell-tool
    #:chat-session
    #:make-chat-session

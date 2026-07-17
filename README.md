@@ -168,7 +168,8 @@ three deliberately distinct modes:
 
 ```bash
 # Interactive multi-turn chat (terminal stdin and stdout; /exit, /quit, Ctrl-C, or EOF ends it).
-./bin/chat --model openai/gpt-4.1-mini
+# A supervisor may supply a nonempty correlation ID; otherwise bin/chat generates one locally.
+./bin/chat --model openai/gpt-4.1-mini --session-id supervisor-session-16
 
 # One-shot chat.
 ./bin/chat --model openai/gpt-4.1-mini \
@@ -188,6 +189,16 @@ goes to stdout while tool and outcome diagnostics go to stderr. A nonzero
 tool result, allowing it to explain or correct the command rather than aborting
 the chat. `--prompt` retains the existing one-shot exit behavior. Run
 `./bin/chat --help` for defaults and requirements.
+
+For interactive supervision, `--session-id ID` forwards a nonempty caller-owned
+correlation ID. Otherwise `bin/chat` generates a non-secret
+`chat-<UTC timestamp>-<process id>` ID for that invocation. Stderr emits JSONL
+lifecycle/turn events (`session-started`, `turn-submitted`, `turn-completed`,
+`turn-failed`, `turn-empty`, and `session-exited`) with that ID; submitted turns
+are monotonically numbered. They are correlation diagnostics, not provider
+per-invocation token or cost accounting. The shared `chat.log` remains sensitive
+diagnostic data, includes available session/turn context, and excludes
+credentials and raw successful tool output.
 
 See [`docs/runtime.md`](docs/runtime.md) for runtime guarantees and [`docs/initial-architecture.md`](docs/initial-architecture.md) for design questions. For a supervising agent that drives persistent `bin/chat` as an isolated, evidence-backed feedback-loop worker, use the in-repo [Harness Chat Feedback Loop skill](skills/autonomous-ai-agents/harness-chat-feedback-loop/SKILL.md).
 

@@ -2,4 +2,5 @@
 (asdf:load-asd (truename "self-improving-agent-harness.asd"))
 (asdf:test-system :self-improving-agent-harness)
 (uiop:run-program '("/bin/sh" "tests/chat-cli.sh") :output t :error-output t)
+(uiop:run-program '("/bin/sh" "tests/chat-events.sh") :output t :error-output t)
 (uiop:run-program '("/bin/sh" "tests/chat-interrupt.sh") :output t :error-output t)

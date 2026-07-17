@@ -36,6 +36,12 @@ expect_error() {
 expect_success 'mode=one-shot prompt=flag prompt model=test/model max-rounds=3' \
   "$repo_root/bin/chat" --model test/model --max-rounds 3 --prompt 'flag prompt'
 
+expect_success 'session-id=chat-' \
+  "$repo_root/bin/chat" --prompt 'generated correlation check'
+
+expect_success 'session-id=supervisor-session-16' \
+  "$repo_root/bin/chat" --session-id supervisor-session-16 --prompt 'correlation check'
+
 workspace_output=$(OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
   "$repo_root/bin/chat" --prompt 'workspace check')
 case "$workspace_output" in
@@ -51,8 +57,8 @@ esac
 
 help_output=$($repo_root/bin/chat --help)
 case "$help_output" in
-  *'Usage: bin/chat'*'OpenRouter model ID'*) ;;
-  *) printf 'Test failed: help output missing model-ID guidance\n' >&2; exit 1 ;;
+  *'Usage: bin/chat'*'--session-id ID'*'OpenRouter model ID'*) ;;
+  *) printf 'Test failed: help output missing session-ID or model-ID guidance\n' >&2; exit 1 ;;
 esac
 
 expect_error 2 'must be a positive integer' \
@@ -61,6 +67,8 @@ expect_error 2 'model must not be empty' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --model '' --prompt x
 expect_error 2 'prompt must not be empty' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --prompt ''
+expect_error 2 'session ID must not be empty' \
+  env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --session-id '' --prompt x
 expect_error 2 'OPENROUTER_API_KEY must be exported' \
   env -u OPENROUTER_API_KEY HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --prompt x
 expect_error 17 'driver failure propagates' \

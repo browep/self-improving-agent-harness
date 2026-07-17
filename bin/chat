@@ -4,7 +4,7 @@ set -eu
 
 usage() {
   cat <<'EOF'
-Usage: bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]
+Usage: bin/chat [--model MODEL] [--max-rounds N] [--session-id ID] [--prompt TEXT]
 
 With --prompt, run one prompt through OpenRouter and the harness tool loop until
 it returns a final response. Without --prompt, a terminal stdin/stdout starts
@@ -15,6 +15,12 @@ OPENROUTER_API_KEY must be exported or present in .env.
 Defaults:
   --model       openai/gpt-4.1-mini (an exact OpenRouter model ID)
   --max-rounds  8
+  --session-id  a locally generated non-secret correlation ID
+
+Pass --session-id when a supervisor owns correlation. IDs are forwarded to the
+chat process and appear in interactive stderr events and shared diagnostic log
+records. Without it, bin/chat generates chat-<UTC timestamp>-<process id>;
+it is deterministic for that invocation, not a credential, and not a resume ID.
 
 Pass the Models API's `id` field to --model, not a display name. Browse
 https://openrouter.ai/models or query https://openrouter.ai/api/v1/models;
@@ -28,6 +34,8 @@ EOF
 
 model=openai/gpt-4.1-mini
 max_rounds=8
+session_id=
+session_id_supplied=false
 prompt=
 prompt_supplied=false
 
@@ -40,6 +48,9 @@ while [ "$#" -gt 0 ]; do
     --max-rounds)
       [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --max-rounds requires a value' >&2; exit 2; }
       max_rounds=$2; shift 2 ;;
+    --session-id)
+      [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --session-id requires a value' >&2; exit 2; }
+      session_id=$2; session_id_supplied=true; shift 2 ;;
     --prompt)
       [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --prompt requires text' >&2; exit 2; }
       prompt=$2; prompt_supplied=true; shift 2 ;;
@@ -52,6 +63,11 @@ case "$max_rounds" in
 esac
 [ "$max_rounds" -gt 0 ] || { printf '%s\n' 'bin/chat: --max-rounds must be positive' >&2; exit 2; }
 [ -n "$model" ] || { printf '%s\n' 'bin/chat: --model must not be empty' >&2; exit 2; }
+if [ "$session_id_supplied" = true ]; then
+  [ -n "$session_id" ] || { printf '%s\n' 'bin/chat: session ID must not be empty' >&2; exit 2; }
+else
+  session_id="chat-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+fi
 
 mode=one-shot
 if [ "$prompt_supplied" = false ]; then
@@ -76,6 +92,7 @@ fi
 export HARNESS_CHAT_MODE=$mode
 export HARNESS_CHAT_MODEL=$model
 export HARNESS_CHAT_MAX_ROUNDS=$max_rounds
+export HARNESS_CHAT_SESSION_ID=$session_id
 if [ "$mode" = one-shot ]; then
   export HARNESS_CHAT_PROMPT=$prompt
 fi
@@ -85,6 +102,7 @@ if [ "$mode" = interactive ]; then
     --env HARNESS_CHAT_MODE \
     --env HARNESS_CHAT_MODEL \
     --env HARNESS_CHAT_MAX_ROUNDS \
+    --env HARNESS_CHAT_SESSION_ID \
     --noinform \
     --load scripts/chat.lisp
 fi
@@ -94,5 +112,6 @@ exec "$container_runner" --writable-workspace \
   --env HARNESS_CHAT_PROMPT \
   --env HARNESS_CHAT_MODEL \
   --env HARNESS_CHAT_MAX_ROUNDS \
+  --env HARNESS_CHAT_SESSION_ID \
   --noinform \
   --load scripts/chat.lisp

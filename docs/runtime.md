@@ -17,7 +17,7 @@ Compiled FASLs and ASDF cache data are written to the Docker named volume `self-
 - `make repl` / `./bin/container --noinform`: build the image and start an interactive SBCL session.
 - `make live-smoke`: make one minimal live OpenRouter chat-completions request.
 - `make live-tool-smoke`: make a live tool-capable OpenRouter request using the deterministic `echo` handler.
-- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls. Its workspace mount is read-write for `run_shell`; the caller is responsible for reviewing and committing any source changes it makes.
+- `./bin/chat [--model MODEL] [--max-rounds N] [--session-id ID] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls. Its workspace mount is read-write for `run_shell`; the caller is responsible for reviewing and committing any source changes it makes.
 
 The wrapper rebuilds before every command, relying on Docker layer caching when inputs are unchanged. Set `HARNESS_IMAGE` to use an alternative local tag.
 
@@ -38,6 +38,29 @@ combined output, so the model can explain or correct it without aborting the
 turn. It does not log the
 OpenRouter API key or raw tool output, but prompts, assistant responses, and
 tool commands can themselves be sensitive.
+
+## Chat session correlation events
+
+Pass `--session-id ID` when a supervisor supplies the correlation identifier.
+`ID` must be nonempty and is forwarded as `HARNESS_CHAT_SESSION_ID`. When it is
+omitted, `bin/chat` generates `chat-<UTC timestamp>-<process id>` locally. The
+generated value is non-secret, stable for that invocation, and intended only to
+correlate its console and diagnostic-log records; it is not a resume token.
+
+In interactive mode stderr includes one JSON object per machine event, alongside
+the existing human prompt/diagnostics. Each event has `event` and `session_id`;
+submitted input is numbered from one and includes `turn`. The lifecycle and turn
+event values are `session-started`, `session-exited`, `turn-submitted`,
+`turn-completed`, `turn-failed`, and `turn-empty`. `session-exited.reason`
+distinguishes `local-exit`, `eof`, and `interrupted`. Empty input emits
+`turn-empty` and makes no provider request; a failed turn emits `turn-failed`,
+retains the previous conversation history, and leaves the interactive session
+running. Final assistant text remains stdout-only.
+
+The shared append-only `chat.log` is diagnostic data, not a per-session
+transcript. Its chat interaction records include the available `session_id` and
+`turn` context. It does not record credentials or raw successful tool output,
+but prompts, assistant text, commands, and failures can still be sensitive.
 
 Inspect the latest entries from the host:
 
