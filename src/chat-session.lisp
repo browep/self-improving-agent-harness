@@ -39,6 +39,10 @@ Returns the final COMPLETION-RESPONSE. Empty input is ignored and returns NIL
 without calling the backend. Errors leave the previous history unchanged and
 are recorded in the configured interaction log before being re-signaled."
   (when (and (stringp content) (plusp (length content)))
+    ;; Close the interactive prompt separator when armed by WRITE-CHAT-PROMPT.
+    ;; Safe no-op for one-shot turns and when the close already ran.
+    (when (fboundp 'maybe-write-chat-prompt-closing)
+      (maybe-write-chat-prompt-closing))
     (log-interaction :info "turn-received" :content content)
     (let* ((messages (append (chat-session-history session)
                              (list (list :role "user" :content content))))

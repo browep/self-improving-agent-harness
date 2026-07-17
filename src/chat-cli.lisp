@@ -5,8 +5,15 @@
 ;;; scripts/chat.lisp only bootstraps env + calls RUN-CHAT-CLI.
 
 (defparameter +chat-input-prompt+
-  "PROMPT> "
+  " >>> "
   "Prompt printed before each interactive user line (stderr).")
+
+(defparameter +chat-prompt-separator+
+  (make-string 80 :initial-element #\-)
+  "Horizontal rule printed around the interactive prompt (stderr).")
+
+(defparameter *pending-chat-prompt-close* nil
+  "When true, the next interactive input should reprint +CHAT-PROMPT-SEPARATOR+.")
 
 (defun required-environment (name)
   (let ((value (uiop:getenv name)))
@@ -59,8 +66,25 @@
       (error "Value must be a positive integer, got ~S." text))
     value))
 
+(defun write-chat-prompt-closing ()
+  "Print the same separator line used above the interactive prompt."
+  (format *error-output* "~A~%" +chat-prompt-separator+)
+  (finish-output *error-output*))
+
+(defun maybe-write-chat-prompt-closing ()
+  "If WRITE-CHAT-PROMPT armed a close, print it once and clear the flag.
+
+This lets an already-running interactive loop pick up the post-submit rule after
+reload_harness, because WRITE-CHAT-PROMPT / HANDLE-INTERACTIVE-COMMAND /
+CHAT-SESSION-TURN resolve through the global function cell each call."
+  (when *pending-chat-prompt-close*
+    (setf *pending-chat-prompt-close* nil)
+    (write-chat-prompt-closing)
+    t))
+
 (defun handle-interactive-command (session input)
   "Handle slash commands that must run in-process. Return T when INPUT was consumed."
+  (maybe-write-chat-prompt-closing)
   (cond
     ((or (string= input "/reload") (string= input "/reload-harness"))
      (format *error-output* "COMMAND /reload~%")
@@ -95,11 +119,24 @@
             (completion-response-model response))))
 
 (defun write-chat-prompt ()
-  "Print the interactive input prompt to stderr using +CHAT-INPUT-PROMPT+."
+  "Print the interactive input prompt to stderr using +CHAT-INPUT-PROMPT+.
+
+Also arms *PENDING-CHAT-PROMPT-CLOSE* so the matching separator is printed once
+the submitted line is handled (works even if RUN-INTERACTIVE itself was not
+re-entered after reload_harness)."
   (format *error-output*
-          "~%----------------------------------------~%~A"
+          "~%~A~%~A"
+          +chat-prompt-separator+
           +chat-input-prompt+)
-  (finish-output *error-output*))
+  (finish-output *error-output*)
+  (setf *pending-chat-prompt-close* t)
+  (values))
+
+(defun read-chat-input-line ()
+  "Read one interactive line, then print the closing separator when armed."
+  (let ((input (read-line *standard-input* nil :eof)))
+    (maybe-write-chat-prompt-closing)
+    input))
 
 (defun run-interactive (backend model max-rounds)
   (let ((session (make-cli-chat-session backend model max-rounds)))
@@ -116,7 +153,7 @@ Commands: /exit, /quit, /reload, /max-rounds [N]. Ctrl-C also leaves.~%"
              (return-from run-interactive nil))))
       (loop
         (write-chat-prompt)
-        (let ((input (read-line *standard-input* nil :eof)))
+        (let ((input (read-chat-input-line)))
           (cond
             ((eq input :eof) (return))
             ((or (string= input "/exit") (string= input "/quit")) (return))
