@@ -9,11 +9,11 @@
    #:log-interaction
    #:emit-chat-event
    #:run-shell-tool
+   #:reload-harness-tool
    #:chat-session
    #:make-chat-session
    #:chat-session-history
-   #:chat-session-last-provider-responses
-   #:chat-session-last-accounting
+   #:chat-session-max-rounds
    #:chat-session-turn
    #:chat-session-failed-turn-p
    #:note-chat-session-failure
@@ -35,72 +35,11 @@
    #:make-openrouter-backend
    #:openrouter-backend-base-url
    #:openrouter-backend-api-key
-   #:experiment
-   #:make-experiment
-   #:experiment-id
-   #:experiment-task-fixture
-   #:experiment-acceptance-criteria
-   #:experiment-agent-configuration
-   #:experiment-evaluator
-   #:experiment-budget
-   #:validate-experiment
-   #:register-experiment
-   #:find-experiment
-   #:defexperiment
-   #:+experiment-schema-version+
-   #:candidate
-   #:make-candidate
-   #:candidate-id
-   #:candidate-experiment-id
-   #:candidate-parent-id
-   #:candidate-configuration
-   #:candidate-configuration-hash
-   #:materialize-candidate
-   #:candidate-generator
-   #:deterministic-configuration-generator
-   #:generate-configuration-candidates
-   #:canonical-configuration
-   #:stable-configuration-hash
-   #:+configuration-candidate-dimensions+
-   #:parse-source-mutation
-   #:validate-source-mutation
-   #:apply-source-mutation
-   #:run-source-mutation-prototype
-   #:run-record
-   #:make-run-record
-   #:run-record-id
-   #:run-record-experiment-id
-   #:run-record-candidate-id
-   #:run-record-started-at
-   #:run-record-finished-at
-   #:run-record-outcome
-   #:run-record-trace-reference
-   #:run-record-usage
-   #:run-record-cost
-   #:evaluation
-   #:make-evaluation
-   #:evaluation-candidate-id
-   #:evaluation-evaluator-id
-   #:evaluation-verdict
-   #:evaluation-evidence
-   #:evaluation-outcome
-   #:evaluation-accounting
-   #:decision
-   #:make-decision
-   #:decision-candidate-id
-   #:decision-action
-   #:decision-rationale
-   #:decision-evaluation-reference
-   #:serialize-domain-object
-   #:normalize-command-check
-   #:run-baseline-fixture
-   #:run-fixed-baseline
-   #:run-configuration-comparison
-   #:retention-decision-from-evaluations
-   #:+run-report-schema-version+
-   #:redact-report-data
-   #:render-run-report-html
-   #:write-run-report-artifacts
-   #:write-scripted-baseline-report
-   #:write-configuration-comparison-report
-   #:run-harness))
+   #:run-harness
+   ;; chat CLI (reloadable via reload_harness)
+   #:+chat-input-prompt+
+   #:write-chat-prompt
+   #:run-interactive
+   #:run-one-shot
+   #:run-chat-cli
+   #:handle-interactive-command))

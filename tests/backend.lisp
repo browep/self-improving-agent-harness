@@ -48,6 +48,7 @@
       (run-tool-loop-tests)
       (run-chat-session-tests)
       (run-shell-tool-tests)
+      (run-reload-tests)
       (run-logging-tests)
       (run-experiment-model-tests)
       (run-runner-wiring-tests)
