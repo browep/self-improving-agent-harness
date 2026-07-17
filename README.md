@@ -189,7 +189,7 @@ tool result, allowing it to explain or correct the command rather than aborting
 the chat. `--prompt` retains the existing one-shot exit behavior. Run
 `./bin/chat --help` for defaults and requirements.
 
-See [`docs/runtime.md`](docs/runtime.md) for runtime guarantees and [`docs/initial-architecture.md`](docs/initial-architecture.md) for design questions.
+See [`docs/runtime.md`](docs/runtime.md) for runtime guarantees and [`docs/initial-architecture.md`](docs/initial-architecture.md) for design questions. For a supervising agent that drives persistent `bin/chat` as an isolated, evidence-backed feedback-loop worker, use the in-repo [Harness Chat Feedback Loop skill](skills/autonomous-ai-agents/harness-chat-feedback-loop/SKILL.md).
 
 ## Selecting a chat model
 
