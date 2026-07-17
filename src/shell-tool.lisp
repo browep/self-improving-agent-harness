@@ -23,10 +23,13 @@ The default list reports wall-clock duration and exit status on *ERROR-OUTPUT*."
   (finish-output *error-output*))
 
 (defun run-run-shell-after-hooks (&rest args &key command exit-status duration-seconds output)
-  "Apply every function in *RUN-SHELL-AFTER-HOOKS* to ARGS."
+  "Apply every function in *RUN-SHELL-AFTER-HOOKS* to ARGS.
+
+Hooks should be symbols when possible so reload_harness can redefine them
+without rewriting this list. Function objects remain supported but stay frozen."
   (declare (ignore command exit-status duration-seconds output))
   (dolist (hook *run-shell-after-hooks*)
-    (apply hook args)))
+    (apply (if (symbolp hook) hook (coerce hook 'function)) args)))
 
 (defun run-shell-tool (arguments)
   "Run the non-empty `command` field from decoded tool ARGUMENTS in the container.
@@ -57,6 +60,7 @@ After the process exits, *RUN-SHELL-AFTER-HOOKS* run with timing and exit status
                                      :exit-status exit-status
                                      :duration-seconds duration-seconds
                                      :output output)
+
           (if (zerop exit-status)
               (progn
                 (log-interaction :info "tool-completed" :tool "run_shell"

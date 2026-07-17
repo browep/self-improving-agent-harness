@@ -4,9 +4,12 @@
 ;;; Loaded via ASDF so reload_harness redefines these in a running chat image.
 ;;; scripts/chat.lisp only bootstraps env + calls RUN-CHAT-CLI.
 ;;;
-;;; Per-turn OUTCOME formatting lives in src/chat-turn-report.lisp. The
-;;; interactive loop calls PROCESS-INTERACTIVE-USER-TURN by name each turn so
-;;; those definitions hot-reload mid-session.
+;;; Hot-reload contract for interactive sessions:
+;;; - RUN-INTERACTIVE stays a thin long-lived frame and only calls helpers by name.
+;;; - Per-turn outcome formatting lives in src/chat-turn-report.lisp.
+;;; - Sessions store OPTIONS/HANDLERS as function designators (symbols), not
+;;;   captured function objects or frozen plists, so tool schemas and handlers
+;;;   re-resolve after reload_harness without rebuilding the session.
 
 (defparameter +chat-input-prompt+
   " >>> "
@@ -49,18 +52,27 @@
         :tools (chat-tool-definitions)))
 
 (defun chat-handlers ()
-  `(("run_shell" . ,#'shell-tool)
-    ("reload_harness" . ,#'reload-tool)))
+  "Return the live tool-handler alist using symbol designators.
+
+Symbols are intentional: OPENROUTER-TOOL-HANDLER / FUNCALL re-resolve them on
+each tool call, so redefining SHELL-TOOL or RELOAD-TOOL via reload_harness is
+visible to the already-running interactive session."
+  '(("run_shell" . shell-tool)
+    ("reload_harness" . reload-tool)))
 
 (defun make-chat-backend ()
   (make-openrouter-backend :api-key (uiop:getenv "OPENROUTER_API_KEY")))
 
 (defun make-cli-chat-session (backend model max-rounds)
+  "Build a CLI chat session that re-resolves options/handlers after reload.
+
+CHAT-OPTIONS and CHAT-HANDLERS are stored as symbols, not as the values they
+currently return. CHAT-SESSION-TURN funcalls those symbols each turn."
   (make-chat-session
    :backend backend
    :model model
-   :options (chat-options)
-   :handlers (chat-handlers)
+   :options 'chat-options
+   :handlers 'chat-handlers
    :max-rounds max-rounds))
 
 (defun parse-positive-integer (text)
@@ -142,38 +154,78 @@ re-entered after reload_harness)."
     (maybe-write-chat-prompt-closing)
     input))
 
+(defun write-interactive-session-banner (model max-rounds)
+  "Print the interactive startup banner to stderr.
+
+Kept as its own function so banner text can hot-reload if RUN-INTERACTIVE is
+re-entered; an already-running process keeps the banner it already printed."
+  (format *error-output*
+          "Interactive OpenRouter chat (model=~A, max-rounds=~D).~%~
+Commands: /exit, /quit, /reload, /max-rounds [N]. Ctrl-C also leaves.~%"
+          model max-rounds)
+  (finish-output *error-output*))
+
+(defun interactive-exit-command-p (input)
+  "True when INPUT is an interactive session-exit slash command."
+  (or (string= input "/exit") (string= input "/quit")))
+
+(defun handle-interactive-interrupt (condition)
+  "Default Ctrl-C policy for interactive chat: leave the session cleanly."
+  (declare (ignore condition))
+  (format *error-output* "~%Interrupted; leaving interactive chat.~%")
+  (finish-output *error-output*)
+  :exit)
+
+(defun process-interactive-input (session input)
+  "Dispatch one interactive input line.
+
+Returns :EXIT when the session should end, otherwise NIL. All work is done via
+named global functions so reload_harness can replace command/turn/prompt policy
+between lines without restarting the process."
+  (cond
+    ((eq input :eof) :exit)
+    ((interactive-exit-command-p input) :exit)
+    ((zerop (length input))
+     (format *error-output* "Empty input ignored.~%")
+     (finish-output *error-output*)
+     nil)
+    ((handle-interactive-command session input)
+     nil)
+    (t
+     (process-interactive-user-turn session input)
+     nil)))
+
+(defun run-interactive-loop (session)
+  "Read/dispatch interactive lines until exit.
+
+This is the long-lived loop frame. Keep it thin: only call helpers by name."
+  (loop
+    (write-chat-prompt)
+    (let ((input (read-chat-input-line)))
+      (when (eq (process-interactive-input session input) :exit)
+        (return))))
+  session)
+
 (defun run-interactive (backend model max-rounds)
   "Persistent interactive chat loop.
 
-The loop body intentionally stays thin and calls PROCESS-INTERACTIVE-USER-TURN,
-HANDLE-INTERACTIVE-COMMAND, WRITE-CHAT-PROMPT, and READ-CHAT-INPUT-LINE by name
-each iteration. Those global function cells are what reload_harness updates;
-this stack frame is not rewritten in place. After one process start on this
-thin loop, outcome/prompt/command changes hot-reload without restarting chat."
+The loop body intentionally stays thin and calls PROCESS-INTERACTIVE-INPUT,
+WRITE-CHAT-PROMPT, and READ-CHAT-INPUT-LINE by name each iteration. Those
+global function cells are what reload_harness updates; this stack frame is not
+rewritten in place. After one process start on this thin loop, outcome/prompt/
+command/tool-handler changes hot-reload without restarting chat.
+
+Still requires process restart: changes to this function's own control flow
+while it is already running, Docker/bin bootstrap, and incompatible
+struct/class layout changes."
   (let ((session (make-cli-chat-session backend model max-rounds)))
-    (format *error-output*
-            "Interactive OpenRouter chat (model=~A, max-rounds=~D).~%~
-Commands: /exit, /quit, /reload, /max-rounds [N]. Ctrl-C also leaves.~%"
-            model max-rounds)
+    (write-interactive-session-banner model max-rounds)
     (handler-bind
         ((sb-sys:interactive-interrupt
            (lambda (condition)
-             (declare (ignore condition))
-             (format *error-output* "~%Interrupted; leaving interactive chat.~%")
-             (finish-output *error-output*)
+             (handle-interactive-interrupt condition)
              (return-from run-interactive nil))))
-      (loop
-        (write-chat-prompt)
-        (let ((input (read-chat-input-line)))
-          (cond
-            ((eq input :eof) (return))
-            ((or (string= input "/exit") (string= input "/quit")) (return))
-            ((zerop (length input))
-             (format *error-output* "Empty input ignored.~%"))
-            ((handle-interactive-command session input)
-             nil)
-            (t
-             (process-interactive-user-turn session input)))))
+      (run-interactive-loop session)
       (when (chat-session-failed-turn-p session)
         (uiop:quit 1)))))
 

@@ -143,8 +143,26 @@ the transport layer owns conversion to OpenRouter's JSON field names."
       (map '(vector (unsigned-byte 8)) #'identity body)
       :external-format :utf-8))))
 
+(defun coerce-tool-handler (handler name)
+  "Return a callable tool handler from HANDLER.
+
+HANDLER may be a function object or a symbol function designator. Symbols are
+preferred for live chat sessions: reload_harness redefines the symbol's
+function cell, and the next tool call picks it up without recreating the
+session. Captured function objects stay frozen until the session is rebuilt."
+  (cond
+    ((null handler) nil)
+    ((functionp handler) handler)
+    ((symbolp handler)
+     (unless (fboundp handler)
+       (error "Tool ~S handler symbol ~S is not fbound." name handler))
+     handler)
+    (t
+     (error "Tool ~S has invalid handler designator ~S." name handler))))
+
 (defun openrouter-tool-handler (handlers name)
-  (cdr (assoc name handlers :test #'string=)))
+  "Look up NAME in HANDLERS and coerce it to a callable designator."
+  (coerce-tool-handler (cdr (assoc name handlers :test #'string=)) name))
 
 (defun openrouter-tool-result-content (result)
   (if (stringp result)
@@ -254,6 +272,10 @@ includes a numeric usage.cost value; partial cost is never summed."
 
 (defun run-tool-loop (backend request handlers &key (max-rounds 60))
   "Run REQUEST through BACKEND, executing registered tool calls until completion.
+
+HANDLERS is an alist of tool-name to function designator (function object or
+symbol). Symbols are resolved on each tool call so reload_harness can replace
+handler implementations mid-session.
 
 MAX-ROUNDS is the effective tool-call round limit (no multiplier). The third
 return value is the ordered provider-response trace required by the supervisor

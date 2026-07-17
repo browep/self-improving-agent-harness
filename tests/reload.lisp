@@ -119,5 +119,101 @@
                    "final-response outcome reports rounds and duration")
       (ensure-true (not (search "model=" out))
                    "final-response outcome no longer embeds the model id")))
+
+  ;; CLI sessions store options/handlers as symbols so later turns re-resolve.
+  (let ((session (self-improving-agent-harness::make-cli-chat-session nil "test/model" 9)))
+    (ensure-equal 'self-improving-agent-harness:chat-options
+                  (chat-session-options session)
+                  "CLI sessions store chat-options as a symbol designator")
+    (ensure-equal 'self-improving-agent-harness:chat-handlers
+                  (chat-session-handlers session)
+                  "CLI sessions store chat-handlers as a symbol designator")
+    (let ((handlers (self-improving-agent-harness:resolve-chat-session-handlers session)))
+      (ensure-equal 'self-improving-agent-harness::shell-tool
+                    (cdr (assoc "run_shell" handlers :test #'string=))
+                    "resolved CLI handlers use symbol tool implementations")
+      (ensure-equal 'self-improving-agent-harness::reload-tool
+                    (cdr (assoc "reload_harness" handlers :test #'string=))
+                    "resolved CLI handlers keep reload_harness as a symbol")))
+
+  ;; Symbol tool handlers are resolved at call time (hot-reload friendly).
+  (let* ((calls 0)
+         (tool-response
+           (make-completion-response
+            :text ""
+            :model "test/model"
+            :tool-calls '((:id "call-symbol" :type "function" :name "mark"
+                           :arguments "{}"))))
+         (final-response
+           (make-completion-response :text "symbol-handler-ok" :model "test/model"))
+         (backend (make-instance 'scripted-backend
+                                 :name "scripted"
+                                 :responses (list tool-response final-response))))
+    (setf (fdefinition 'self-improving-agent-harness/tests::reloadable-mark-tool)
+          (lambda (arguments)
+            (declare (ignore arguments))
+            (incf calls)
+            "marked"))
+    (let ((result
+            (self-improving-agent-harness:run-tool-loop
+             backend
+             (make-completion-request
+              :model "test/model"
+              :messages '((:role "user" :content "mark it")))
+             '(("mark" . self-improving-agent-harness/tests::reloadable-mark-tool)))))
+      (ensure-equal "symbol-handler-ok" (completion-response-text result)
+                    "symbol tool handlers participate in the tool loop")
+      (ensure-equal 1 calls
+                    "symbol tool handlers are funcalled through the designator")))
+
+  ;; Re-resolving options/handlers designators picks up redefined functions.
+  (let* ((session (make-chat-session
+                   :backend nil
+                   :model "test/model"
+                   :options 'self-improving-agent-harness/tests::reloadable-chat-options
+                   :handlers 'self-improving-agent-harness/tests::reloadable-chat-handlers)))
+    (setf (fdefinition 'self-improving-agent-harness/tests::reloadable-chat-options)
+          (lambda () '(:max-tokens 1)))
+    (setf (fdefinition 'self-improving-agent-harness/tests::reloadable-chat-handlers)
+          (lambda () '(("echo" . self-improving-agent-harness/tests::reloadable-echo-v1))))
+    (ensure-equal '(:max-tokens 1)
+                  (self-improving-agent-harness:resolve-chat-session-options session)
+                  "options designator is resolved on demand")
+    (setf (fdefinition 'self-improving-agent-harness/tests::reloadable-chat-options)
+          (lambda () '(:max-tokens 2 :temperature 0.1)))
+    (ensure-equal '(:max-tokens 2 :temperature 0.1)
+                  (self-improving-agent-harness:resolve-chat-session-options session)
+                  "redefined options designator is visible without rebuilding the session")
+    (ensure-equal 'self-improving-agent-harness/tests::reloadable-echo-v1
+                  (cdr (assoc "echo"
+                              (self-improving-agent-harness:resolve-chat-session-handlers session)
+                              :test #'string=))
+                  "handlers designator is resolved on demand")
+    (setf (fdefinition 'self-improving-agent-harness/tests::reloadable-chat-handlers)
+          (lambda () '(("echo" . self-improving-agent-harness/tests::reloadable-echo-v2))))
+    (ensure-equal 'self-improving-agent-harness/tests::reloadable-echo-v2
+                  (cdr (assoc "echo"
+                              (self-improving-agent-harness:resolve-chat-session-handlers session)
+                              :test #'string=))
+                  "redefined handlers designator is visible without rebuilding the session"))
+
+  ;; Leading system prompt tracks +chat-system-prompt+ across reloads.
+  (let* ((session (make-chat-session :backend nil :model "test/model" :handlers '()))
+         (original self-improving-agent-harness:+chat-system-prompt+))
+    (unwind-protect
+         (progn
+           (setf self-improving-agent-harness:+chat-system-prompt+
+                 "updated system prompt for reload tests")
+           (self-improving-agent-harness:ensure-chat-session-system-prompt session)
+           (ensure-equal "updated system prompt for reload tests"
+                         (getf (first (chat-session-history session)) :content)
+                         "ensure-chat-session-system-prompt rewrites the leading system message"))
+      (setf self-improving-agent-harness:+chat-system-prompt+ original)))
+
+  (ensure-true (fboundp 'self-improving-agent-harness:process-interactive-input)
+               "process-interactive-input is reloadable interactive dispatch")
+  (ensure-true (fboundp 'self-improving-agent-harness:run-interactive-loop)
+               "run-interactive-loop is the thin long-lived interactive frame")
+
   (format t "Reload-hook tests passed.~%")
   t)
