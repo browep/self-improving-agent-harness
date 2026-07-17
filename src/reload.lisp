@@ -22,15 +22,16 @@
     (nreverse files)))
 
 (defun reload-harness-source-files ()
-  "Recompile/load every Lisp file in the harness ASDF system.
+  "Reload every Lisp source file in the harness ASDF system from source.
 
-Avoids ASDF:LOAD-SYSTEM :FORCE T, which cannot run nested inside another ASDF
-operate (for example asdf:test-system)."
+The Docker runtime mounts /workspace read-only, so COMPILE-FILE cannot safely
+write FASLs beside sources. Loading the source files directly redefines the
+running image without mutating the checkout or relying on ASDF's outer
+operation state."
   (let* ((system (asdf:find-system :self-improving-agent-harness t))
          (files (harness-source-files system)))
     (dolist (file files)
-      (let ((fasl (compile-file file :verbose nil :print nil)))
-        (load fasl :verbose nil :print nil)))
+      (load file :verbose nil :print nil))
     files))
 
 (defun reload-harness-tool (arguments)

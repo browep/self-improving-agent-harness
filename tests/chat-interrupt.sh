@@ -25,7 +25,7 @@ chat_pid=$!
 # Wait until the script has loaded and is blocked in READ-LINE before SIGINT.
 ready=false
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
-  if grep -F 'chat> ' "$output" >/dev/null 2>&1; then
+  if grep -F 'PROMPT>' "$output" >/dev/null 2>&1; then
     ready=true
     break
   fi

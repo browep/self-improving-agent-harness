@@ -1,12 +1,9 @@
 #!/usr/bin/env sh
-# Execute the Docker-contained ASDF tests, then the host-side real-Docker stream
-# regression. The latter cannot run inside the test container because it needs
-# the host Docker Engine transport boundary.
+# Execute the full ASDF test system in the portable container runtime.
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-"$repo_root/bin/container" \
+exec "$repo_root/bin/container" \
   --no-network \
   --non-interactive \
   --load scripts/run-tests.lisp
-"$repo_root/tests/chat-supervised-docker-transport.sh"

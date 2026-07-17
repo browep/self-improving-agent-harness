@@ -14,6 +14,10 @@
    #:make-chat-session
    #:chat-session-history
    #:chat-session-max-rounds
+   ;; Session accounting remains a compatibility surface for the supervisor
+   ;; evidence path while the reloadable CLI owns interaction orchestration.
+   #:chat-session-last-provider-responses
+   #:chat-session-last-accounting
    #:chat-session-turn
    #:chat-session-failed-turn-p
    #:note-chat-session-failure

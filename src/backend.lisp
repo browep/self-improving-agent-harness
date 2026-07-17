@@ -255,12 +255,17 @@ includes a numeric usage.cost value; partial cost is never summed."
 (defun run-tool-loop (backend request handlers &key (max-rounds 8))
   "Run REQUEST through BACKEND, executing registered tool calls until completion.
 
-The effective round limit is double the configured MAX-ROUNDS value."
+The reload-harness behavior retains its doubled effective round limit.  The
+third return value is the ordered provider-response trace required by the
+supervisor accounting boundary; callers that only consume two values are
+unchanged."
   (let ((effective-max-rounds (* 2 max-rounds)))
-    (labels ((run-next-round (current-request round)
+    (labels ((run-next-round (current-request round responses)
                (let ((response (complete backend current-request)))
                  (if (null (completion-response-tool-calls response))
-                     (values response (completion-request-messages current-request))
+                     (values response
+                             (completion-request-messages current-request)
+                             (nreverse (cons response responses)))
                      (progn
                        (when (>= round effective-max-rounds)
                          (error "Tool-call loop exceeded its ~D round limit."
@@ -277,8 +282,9 @@ The effective round limit is double the configured MAX-ROUNDS value."
                                  :model (completion-request-model current-request)
                                  :messages next-messages
                                  :options (completion-request-options current-request))))
-                         (run-next-round next-request (1+ round))))))))
-      (run-next-round request 0))))
+                         (run-next-round next-request (1+ round)
+                                         (cons response responses))))))))
+      (run-next-round request 0 '()))))
 
 (defmethod complete ((backend openrouter-backend) request)
   (let ((api-key (openrouter-backend-api-key backend)))
