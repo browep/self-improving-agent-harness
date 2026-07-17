@@ -24,7 +24,7 @@ printf '%s\n' \
   env HARNESS_CHAT_RUNNER="$repo_root/tests/fake-supervised-chat-container.sh" \
   "$repo_root/bin/chat-supervisor" \
     --create-worktree --repo "$primary" --base-ref HEAD --run-id lifecycle-red-16 \
-    --worktree-parent "$parent" --session-id lifecycle-session-16 --model offline/fake \
+    --worktree-parent "$parent" --session-id lifecycle-session-16 --model 'OPENROUTER_API_KEY=never-persist' \
     --report-dir "$reports" --fake --verify-command '/bin/true' >"$output"
 
 owned_worktree=$(python3 - "$output" "$primary" "$parent" "$reports" "$primary_before" <<'PY'
@@ -58,6 +58,7 @@ for forbidden in ("openrouter_api_key", "never-persist", "credential openrouter"
     assert forbidden not in body.lower(), (forbidden, body)
 report = json.loads(json_path.read_text())
 assert report["schema_version"] == "chat-supervisor-session-v1", report
+assert report["model_invoked"] == "redacted", report
 assert report["final_decision"] == "unresolved", report
 assert report["turns"][0]["evaluator_feedback_id"] == "eval-1", report
 assert not report.get("merged") and not report.get("deleted"), report

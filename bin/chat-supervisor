@@ -58,6 +58,15 @@ def safe_text(value):
     return value if re.fullmatch(r"[A-Za-z0-9 .,:/_+()=-]+", value) else None
 
 
+def redacted_report_text(value):
+    """Retain non-sensitive configured labels without serializing credentials."""
+    if not isinstance(value, str):
+        return "unavailable"
+    if re.search(r"(?i)(api[_-]?key|authorization|bearer|password|credential|secret|token)", value):
+        return "redacted"
+    return value
+
+
 def registered_worktrees(repo):
     listing = git(repo, ["worktree", "list", "--porcelain"])
     if listing.returncode:
@@ -174,7 +183,7 @@ def sanitized_checkpoint(worktree, verification_command):
         "diff_stat_exit_code": diff_stat.returncode,
         # Deliberately a count only: raw stat contains changed file paths.
         "diff_stat_lines": len(diff_stat.stdout.splitlines()) if diff_stat.returncode == 0 else 0,
-    }, "verification": {"command": verification_command,
+    }, "verification": {"command": redacted_report_text(verification_command),
                             "status": "passed" if verification.returncode == 0 else "failed",
                             "exit_code": verification.returncode},
         "provider_usage": "unavailable", "provider_cost": "unavailable"}
@@ -263,7 +272,7 @@ def main():
     if is_within(absolute(args.report_dir), worktree): raise RuntimeError("report-dir-inside-worktree")
     branch = branch or git(worktree, ["branch", "--show-current"]).stdout.strip()
     base_commit = base_commit or git(worktree, ["rev-parse", "HEAD"]).stdout.strip()
-    report = {"schema_version": REPORT_SCHEMA_VERSION, "task": "unavailable", "session": {"id": args.session_id, "worktree": str(worktree), "branch": branch, "base_commit": base_commit, "owned": owned}, "model_invoked": args.model, "accounting": {"usage": "unavailable", "cost": "unavailable"}, "tool_metadata": "unavailable", "feedback": [], "turns": [], "final_decision": args.decision or "unresolved", "merged": False, "deleted": False}
+    report = {"schema_version": REPORT_SCHEMA_VERSION, "task": "unavailable", "session": {"id": args.session_id, "worktree": str(worktree), "branch": branch, "base_commit": base_commit, "owned": owned}, "model_invoked": redacted_report_text(args.model), "accounting": {"usage": "unavailable", "cost": "unavailable"}, "tool_metadata": "unavailable", "feedback": [], "turns": [], "final_decision": args.decision or "unresolved", "merged": False, "deleted": False}
     emit({"type":"session-started", **report["session"]})
     chat = [str(worktree / "bin" / "chat"), "--supervised", "--session-id", args.session_id]
     if args.fake: chat.append("--fake")
@@ -277,9 +286,11 @@ def main():
             if op == "feedback":
                 verdict, evidence, feedback_id = request.get("verdict"), request.get("evidence"), request.get("id")
                 clean = [safe_text(x) for x in evidence] if isinstance(evidence, list) else []
-                if verdict not in ("accept", "reject", "inconclusive") or not isinstance(feedback_id, str) or not clean or any(x is None for x in clean):
+                if (verdict not in ("accept", "reject", "inconclusive") or
+                        not isinstance(feedback_id, str) or not RUN_ID_RE.fullmatch(feedback_id) or
+                        not clean or any(x is None for x in clean)):
                     emit({"type":"error","code":"invalid-feedback"}); continue
-                feedback = {"id": feedback_id[:64], "verdict": verdict, "evidence": clean}
+                feedback = {"id": feedback_id, "verdict": verdict, "evidence": clean}
                 report["feedback"].append(feedback); pending_feedback = feedback["id"]; emit({"type":"feedback", **feedback})
             elif op == "turn" and isinstance(request.get("text"), str):
                 turn += 1; completion, text = child.submit_turn(request["text"]); evidence = sanitized_checkpoint(str(worktree), args.verify_command)

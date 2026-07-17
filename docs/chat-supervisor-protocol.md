@@ -24,8 +24,8 @@ printf '%s\n' \
 
 A safe pre-created worktree may be passed with `--worktree`, `--worktree-parent`
 and `--run-id` only when it is clean, is below the configured parent, is not the
-primary checkout, and contains a supervisor ownership marker
-`.chat-supervisor-owner.json` with `{"run_id":"…","owned":true}`.
+primary checkout, is still registered by Git, and exactly matches the
+parent-side `.chat-supervisor-runs/<run-id>.json` ownership ledger record.
 
 `session-started` contains only `{session_id, worktree, branch, base_commit,
 owned}` lineage. Run IDs are 1–64 ASCII letters/digits plus `._-`; a persistent
@@ -41,7 +41,7 @@ One object per line:
 * `{"op":"turn","text":"…"}` submits one worker turn. The prompt is never
   persisted in the evidence report.
 * `{"op":"checkpoint"}` performs a supervisor snapshot without a worker turn.
-* `{"op":"feedback","id":"id","verdict":"accept|reject|inconclusive","evidence":["safe structured evidence"]}` records external evaluator input. Evidence is an array of at least one short (160 character maximum) restricted safe string; credentials, token-like keys, raw output/error-like fields, and arbitrary free-form output are rejected. The next turn records `evaluator_feedback_id`; the worker cannot set evaluator fields or a decision.
+* `{"op":"feedback","id":"id","verdict":"accept|reject|inconclusive","evidence":["safe structured evidence"]}` records external evaluator input. The ID uses the same 1–64 ASCII letter/digit/`._-` syntax as a run ID. Evidence is an array of at least one short (160 character maximum) restricted safe string; credentials, token-like keys, raw output/error-like fields, and arbitrary free-form output are rejected. The next turn records `evaluator_feedback_id`; the worker cannot set evaluator fields or a decision.
 * `{"op":"exit"}` exits the worker and writes artifacts.
 
 Invalid JSON, operations, or feedback produce a small error record only.
@@ -60,7 +60,9 @@ On normal exit, `session.json` and self-contained `session.html` are written to
 the explicit `--report-dir` from the same in-memory sanitized report. They
 contain schema version, session/task lineage, selected model, unavailable
 accounting unless an authoritative integration supplies it, safe tool metadata
-state, feedback, per-turn Git/test data, and final decision. Decision is
+state, feedback, per-turn Git/test data, and final decision. Credential-bearing
+model or verification-command labels are persisted as `redacted`, never with
+their values. Decision is
 `unresolved` unless a separate external supervisor supplied `--decision retain`
 or `--decision reject`. The artifacts are under ignored `reports/`; paths are
 reported in the final event. The supervisor does not claim provider cost, full
