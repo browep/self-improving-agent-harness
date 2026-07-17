@@ -8,9 +8,11 @@
    #:configure-interaction-logging
    #:log-interaction
    #:run-shell-tool
+   #:reload-harness-tool
    #:chat-session
    #:make-chat-session
    #:chat-session-history
+   #:chat-session-max-rounds
    #:chat-session-turn
    #:chat-session-failed-turn-p
    #:note-chat-session-failure
@@ -32,4 +34,11 @@
    #:make-openrouter-backend
    #:openrouter-backend-base-url
    #:openrouter-backend-api-key
-   #:run-harness))
+   #:run-harness
+   ;; chat CLI (reloadable via reload_harness)
+   #:+chat-input-prompt+
+   #:write-chat-prompt
+   #:run-interactive
+   #:run-one-shot
+   #:run-chat-cli
+   #:handle-interactive-command))

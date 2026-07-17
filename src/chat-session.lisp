@@ -1,7 +1,7 @@
 (in-package #:self-improving-agent-harness)
 
 (defparameter +chat-system-prompt+
-  "Use run_shell when it helps answer the user. When finished, return a final response without tool calls.")
+  "Use run_shell when it helps answer the user. Use reload_harness after editing harness Lisp sources when the change must take effect in this same chat process. When finished, return a final response without tool calls.")
 
 (defstruct (chat-session
             (:constructor %make-chat-session

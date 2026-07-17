@@ -17,7 +17,7 @@ Compiled FASLs and ASDF cache data are written to the Docker named volume `self-
 - `make repl` / `./bin/container --noinform`: build the image and start an interactive SBCL session.
 - `make live-smoke`: make one minimal live OpenRouter chat-completions request.
 - `make live-tool-smoke`: make a live tool-capable OpenRouter request using the deterministic `echo` handler.
-- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls. Its workspace mount is read-write for `run_shell`; the caller is responsible for reviewing and committing any source changes it makes.
+- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls. Its workspace mount is read-write for `run_shell`; the caller is responsible for reviewing and committing any source changes it makes. After editing harness Lisp sources, use the in-process `reload_harness` tool or interactive `/reload` so the running image picks them up; `/max-rounds [N]` changes the live tool-loop limit without restarting.
 
 The wrapper rebuilds before every command, relying on Docker layer caching when inputs are unchanged. Set `HARNESS_IMAGE` to use an alternative local tag.
 
@@ -56,7 +56,8 @@ backend. The OpenRouter non-streaming chat-completions adapter and sequential
 tool-call loop are implemented. `bin/chat` provides both a one-prompt CLI and
 a terminal-only persistent interactive chat session. The interactive session
 keeps its ordered system/user/assistant/tool history in memory, executes
-`run_shell` inside the container, sends matching results back to the model, and
-prints final assistant content. It does not provide streaming/SSE, persistent
+`run_shell` and in-process `reload_harness` inside the container, sends matching results back to the model, and
+prints final assistant content. Interactive sessions also accept `/reload` and
+`/max-rounds [N]` without a provider round-trip. It does not provide streaming/SSE, persistent
 transcripts, cross-process resume, or a policy/sandbox layer. `make repl`
 remains the raw Docker SBCL REPL; it is not the model-chat interface.

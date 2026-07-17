@@ -34,6 +34,7 @@
       (run-tool-loop-tests)
       (run-chat-session-tests)
       (run-shell-tool-tests)
+      (run-reload-tests)
       (run-logging-tests)
       (format t "Self-improving-agent-harness smoke tests passed.~%")
       t))

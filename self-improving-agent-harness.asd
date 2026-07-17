@@ -8,7 +8,9 @@
                (:file "src/backend")
                (:file "src/logging")
                (:file "src/shell-tool")
+               (:file "src/reload")
                (:file "src/chat-session")
+               (:file "src/chat-cli")
                (:file "src/main"))
   :in-order-to ((test-op (test-op "self-improving-agent-harness/tests"))))
 
@@ -21,6 +23,7 @@
                (:file "tests/tool-loop")
                (:file "tests/chat-session")
                (:file "tests/shell-tool")
+               (:file "tests/reload")
                (:file "tests/logging"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
