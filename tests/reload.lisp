@@ -12,6 +12,7 @@
         (subseq message value-start value-end)))))
 
 (defun run-reload-tests ()
+  (self-improving-agent-harness:clear-synthetic-followups)
   (let ((message (self-improving-agent-harness:reload-harness-tool nil)))
     (ensure-true (search "Reloaded self-improving-agent-harness" message)
                  "reload tool reports a successful in-process reload")
@@ -214,6 +215,106 @@
                "process-interactive-input is reloadable interactive dispatch")
   (ensure-true (fboundp 'self-improving-agent-harness:run-interactive-loop)
                "run-interactive-loop is the thin long-lived interactive frame")
+
+  ;; Synthetic follow-up queue: schedule + consume without a human message.
+  (self-improving-agent-harness:clear-synthetic-followups)
+  (ensure-true (null self-improving-agent-harness:*pending-synthetic-followups*)
+               "synthetic follow-up queue starts empty in this test")
+  (self-improving-agent-harness:schedule-synthetic-followup
+   "auto follow-up please use new tools"
+   :source "test")
+  (ensure-equal 1 (length self-improving-agent-harness:*pending-synthetic-followups*)
+                "schedule-synthetic-followup enqueues one item")
+  (ensure-equal "auto follow-up please use new tools"
+                (self-improving-agent-harness:take-next-synthetic-followup)
+                "take-next-synthetic-followup returns FIFO content")
+  (ensure-true (null self-improving-agent-harness:*pending-synthetic-followups*)
+               "queue is empty after taking the only item")
+
+  ;; Successful reload_harness schedules a synthetic follow-up automatically.
+  (self-improving-agent-harness:clear-synthetic-followups)
+  (let ((message (self-improving-agent-harness:reload-harness-tool nil)))
+    (ensure-equal "ok" (reload-result-field message "status")
+                  "reload for synthetic-followup scheduling reports status=ok")
+    (ensure-true (plusp (length self-improving-agent-harness:*pending-synthetic-followups*))
+                 "successful reload_harness schedules a synthetic follow-up")
+    (ensure-true (search "reload_harness finished"
+                         (first self-improving-agent-harness:*pending-synthetic-followups*))
+                 "synthetic follow-up text mentions reload_harness")
+    (self-improving-agent-harness:clear-synthetic-followups))
+
+  ;; maybe-run-synthetic-followup-turns issues a real chat turn with the queued text.
+  (self-improving-agent-harness:clear-synthetic-followups)
+  (let* ((followup-response
+           (make-completion-response :text "synthetic-followup-ok" :model "test/model"))
+         (backend (make-instance 'scripted-backend
+                                 :name "scripted"
+                                 :responses (list followup-response)))
+         (session (make-chat-session :backend backend :model "test/model"
+                                     :options '(:max-tokens 32) :handlers '())))
+    (self-improving-agent-harness:schedule-synthetic-followup
+     "[harness] test synthetic follow-up" :source "test")
+    (let ((stdout (make-string-output-stream))
+          (stderr (make-string-output-stream)))
+      (let ((*standard-output* stdout)
+            (*error-output* stderr))
+        (self-improving-agent-harness:maybe-run-synthetic-followup-turns session))
+      (let ((err (get-output-stream-string stderr)))
+        (ensure-true (search "SYNTHETIC_FOLLOWUP begin initiator=harness" err)
+                     "synthetic follow-up announces begin on stderr")
+        (ensure-true (search "SYNTHETIC_FOLLOWUP end initiator=harness status=ok" err)
+                     "synthetic follow-up announces end on stderr")))
+    (ensure-equal "synthetic-followup-ok"
+                  (getf (car (last (chat-session-history session))) :content)
+                  "synthetic follow-up appends the assistant reply to history")
+    (let* ((requests (reverse (scripted-backend-received-requests backend)))
+           (messages (completion-request-messages (first requests))))
+      (ensure-equal 1 (length requests)
+                    "synthetic follow-up performs one provider request")
+      (ensure-equal "[harness] test synthetic follow-up"
+                    (getf (car (last messages)) :content)
+                    "synthetic follow-up sends the queued user content")
+      (ensure-true (null self-improving-agent-harness:*pending-synthetic-followups*)
+                   "synthetic follow-up queue is consumed after running")))
+
+  ;; Scheduling is suppressed while a synthetic follow-up is running.
+  (self-improving-agent-harness:clear-synthetic-followups)
+  (let ((self-improving-agent-harness:*suppress-synthetic-followup-scheduling* t))
+    (self-improving-agent-harness:schedule-synthetic-followup "should not queue" :source "test")
+    (ensure-true (null self-improving-agent-harness:*pending-synthetic-followups*)
+                 "suppress flag blocks schedule-synthetic-followup"))
+
+  
+  ;; Successful reload leaves started/progress/completed breadcrumbs with duration.
+  (let* ((directory #P"/tmp/self-improving-agent-harness-reload-progress-test/")
+         (session-id "2026-01-01T00:00:00.007Z")
+         (path (merge-pathnames (format nil "~A.jsonl" session-id) directory)))
+    (when (probe-file directory)
+      (uiop:delete-directory-tree directory :validate t))
+    (ensure-directories-exist directory)
+    (unwind-protect
+         (progn
+           (self-improving-agent-harness:clear-synthetic-followups)
+           (self-improving-agent-harness::configure-interaction-logging
+            directory :session-id session-id)
+           (let ((message (self-improving-agent-harness:reload-harness-tool nil)))
+             (ensure-equal "ok" (reload-result-field message "status")
+                           "progress-instrumented reload still reports status=ok"))
+           (let ((content (uiop:read-file-string path)))
+             (ensure-true (search "\"event\":\"reload-started\"" content)
+                          "reload logs reload-started")
+             (ensure-true (search "\"event\":\"reload-progress\"" content)
+                          "reload logs per-file reload-progress")
+             (ensure-true (search "\"event\":\"reload-completed\"" content)
+                          "reload logs reload-completed")
+             (ensure-true (search "\"event\":\"tool-completed\"" content)
+                          "reload still logs tool-completed")
+             (ensure-true (search "\"durationSeconds\":" content)
+                          "reload completion includes durationSeconds")))
+      (self-improving-agent-harness::configure-interaction-logging nil)
+      (self-improving-agent-harness:clear-synthetic-followups)
+      (when (probe-file directory)
+        (uiop:delete-directory-tree directory :validate t))))
 
   (format t "Reload-hook tests passed.~%")
   t)

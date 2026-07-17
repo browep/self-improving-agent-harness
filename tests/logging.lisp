@@ -40,10 +40,14 @@
                           "interaction log includes a per-record uuid")
              (ensure-true (search "turn-received" content)
                           "interaction log retains the turn lifecycle event")
+             (ensure-true (search "\"initiator\":\"human\"" content)
+                          "interaction log records initiator at top level")
+             (ensure-true (search "OPENROUTER_API_KEY=***" content)
+                          "interaction log retains scrubbed turn content")
              (ensure-true (not (search "sk-test-do-not-persist" content))
-                          "interaction log excludes secret-bearing turn content")
-             (ensure-true (not (search "Tool handler \\\"run_shell\\\" failed." content))
-                          "interaction log excludes arbitrary failure details")
+                          "interaction log redacts secret-looking token bodies")
+             (ensure-true (search "Tool handler" content)
+                          "interaction log can retain failure message text when content logging is on")
              (ensure-true (not (probe-file (merge-pathnames "chat.log" directory)))
                           "legacy shared chat.log is no longer written")))
       (self-improving-agent-harness::configure-interaction-logging nil)
@@ -68,8 +72,8 @@
                           "chat session logs the received user turn")
              (ensure-true (search "turn-failed" content)
                           "chat session logs failed turns")
-             (ensure-true (not (search "Test backend exhausted" content))
-                          "chat session excludes the backend failure detail")))
+             (ensure-true (search "\"initiator\":\"human\"" content)
+                          "chat session turn records include initiator=human")))
       (self-improving-agent-harness::configure-interaction-logging nil)
       (when (probe-file directory)
         (uiop:delete-directory-tree directory :validate t))))
@@ -94,8 +98,10 @@
                           "shell tool events use Claude-style type=tool")
              (ensure-true (search "tool-failed" content)
                           "shell tool logs failed command execution")
-             (ensure-true (not (search "exit 9" content))
-                          "shell tool log excludes the failing command")))
+             (ensure-true (search "exit 9" content)
+                          "shell tool log can retain the command when content logging is on")
+             (ensure-true (search "\"initiator\":" content)
+                          "tool log records include initiator")))
       (self-improving-agent-harness::configure-interaction-logging nil)
       (when (probe-file directory)
         (uiop:delete-directory-tree directory :validate t))))
@@ -151,6 +157,71 @@
                           "non-timestamp correlation ids still use an ISO timestamp log basename")
              (ensure-true (probe-file (logging-test-session-path directory file-id))
                           "session file path matches the ISO timestamp file id")))
+      (self-improving-agent-harness::configure-interaction-logging nil)
+      (when (probe-file directory)
+        (uiop:delete-directory-tree directory :validate t))))
+  ;; initiator=harness is visible for synthetic follow-up style turns.
+  (let* ((directory #P"/tmp/self-improving-agent-harness-initiator-logging-test/")
+         (session-id "2026-01-01T00:00:00.005Z")
+         (path (logging-test-session-path directory session-id)))
+    (when (probe-file directory)
+      (uiop:delete-directory-tree directory :validate t))
+    (unwind-protect
+         (progn
+           (self-improving-agent-harness::configure-interaction-logging
+            directory :session-id session-id)
+           (let ((self-improving-agent-harness:*interaction-turn-initiator* "harness"))
+             (self-improving-agent-harness::log-interaction
+              :info "turn-received" :content "[harness] synthetic follow-up"))
+           (let ((content (uiop:read-file-string path)))
+             (ensure-true (search "\"initiator\":\"harness\"" content)
+                          "harness-initiated turns record initiator=harness")
+             (ensure-true (search "[harness] synthetic follow-up" content)
+                          "harness-initiated turn content is retained in JSONL")))
+      (self-improving-agent-harness::configure-interaction-logging nil)
+      (when (probe-file directory)
+        (uiop:delete-directory-tree directory :validate t))))
+
+
+  ;; Hang-diagnosis events keep tool typing and retain status/duration metadata.
+  (let* ((directory #P"/tmp/self-improving-agent-harness-hang-diagnosis-logging-test/")
+         (session-id "2026-01-01T00:00:00.006Z")
+         (path (logging-test-session-path directory session-id)))
+    (when (probe-file directory)
+      (uiop:delete-directory-tree directory :validate t))
+    (unwind-protect
+         (progn
+           (self-improving-agent-harness::configure-interaction-logging
+            directory :session-id session-id)
+           (self-improving-agent-harness::log-interaction
+            :info "provider-request" :round 0 :model "test/model"
+            :timeout-seconds 120)
+           (self-improving-agent-harness::log-interaction
+            :error "provider-http-error" :status-code 500
+            :duration-seconds 1.25
+            :body-snippet "internal error detail"
+            :message "OpenRouter request failed with HTTP status 500.")
+           (self-improving-agent-harness::log-interaction
+            :info "reload-progress" :tool "reload_harness"
+            :loaded-file-count 2 :total-file-count 5
+            :file "src/backend.lisp")
+           (let ((content (uiop:read-file-string path)))
+             (ensure-true (search "\"event\":\"provider-request\"" content)
+                          "provider-request remains durable")
+             (ensure-true (search "\"timeoutSeconds\":120" content)
+                          "provider timeout metadata is retained")
+             (ensure-true (search "\"event\":\"provider-http-error\"" content)
+                          "provider-http-error is durable")
+             (ensure-true (search "\"statusCode\":500" content)
+                          "HTTP status codes are retained")
+             (ensure-true (search "internal error detail" content)
+                          "HTTP body snippets are retained when content logging is on")
+             (ensure-true (search "\"event\":\"reload-progress\"" content)
+                          "reload-progress is durable")
+             (ensure-true (search "src/backend.lisp" content)
+                          "reload progress retains the relative file path")
+             (ensure-true (search "\"type\":\"tool\"" content)
+                          "hang-diagnosis provider/reload events map to type=tool")))
       (self-improving-agent-harness::configure-interaction-logging nil)
       (when (probe-file directory)
         (uiop:delete-directory-tree directory :validate t))))

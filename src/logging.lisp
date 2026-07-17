@@ -1,13 +1,20 @@
 (in-package #:self-improving-agent-harness)
 
-(defparameter *interaction-log-path* nil
-  "Path to the append-only per-session JSONL interaction log, or NIL when disabled.")
+(defvar *interaction-log-path* nil
+  "Path to the append-only per-session JSONL interaction log, or NIL when disabled.
 
-(defparameter *interaction-log-directory* nil
-  "Directory that holds per-session $ISO-TIMESTAMP.jsonl interaction logs, or NIL.")
+DEFVAR (not DEFPARAMETER) so reload_harness does not wipe the live session log
+path when src/logging.lisp is reloaded mid-chat.")
 
-(defparameter *interaction-log-file-id* nil
-  "ISO-8601 UTC timestamp basename (without .jsonl) of the active per-session log file, or NIL.")
+(defvar *interaction-log-directory* nil
+  "Directory that holds per-session $ISO-TIMESTAMP.jsonl interaction logs, or NIL.
+
+DEFVAR so reload_harness preserves the active logging directory.")
+
+(defvar *interaction-log-file-id* nil
+  "ISO-8601 UTC timestamp basename (without .jsonl) of the active per-session log file, or NIL.
+
+DEFVAR so reload_harness preserves the active log file id.")
 
 (defvar *interaction-session-id* nil
   "Dynamically bound non-secret correlation ID for interaction diagnostics.
@@ -21,6 +28,21 @@ always an ISO-8601 UTC timestamp stored in *INTERACTION-LOG-FILE-ID*
 
 (defvar *interaction-parent-uuid* nil
   "UUID of the previous JSONL record in this session, for Claude-style parent links.")
+
+(defvar *interaction-turn-initiator* "human"
+  "Who initiated the current user turn: \"human\", \"harness\", or \"command\".
+
+Bound around synthetic follow-ups and slash-command driven turns so JSONL
+records can show initiator without guessing from message text.")
+
+(defvar *interaction-log-record-content* t
+  "When true, durable JSONL records may include message/tool/provider text.
+
+Secrets are still scrubbed via SCRUB-INTERACTION-LOG-TEXT. Set to NIL for
+metadata-only logs (legacy redaction mode).")
+
+(defparameter *interaction-log-content-limit* 8000
+  "Maximum characters of a single content string retained in JSONL.")
 
 (defun interaction-log-timestamp ()
   "Return an ISO-8601 UTC timestamp with millisecond precision when available."
@@ -148,33 +170,110 @@ filename only. Parent-record linkage is reset for the new session file."
                     (find character "._/-")))
               value)))
 
-(defun safe-interaction-log-fields (fields)
-  "Return only allow-listed non-content fields for a durable diagnostic log.
+(defun scrub-interaction-log-text (text)
+  "Return TEXT with common secret patterns redacted for durable logs."
+  (let ((out (if (stringp text) text (princ-to-string text))))
+    (labels ((replace-all (string pattern replacement)
+               (loop for start = (search pattern string :test #'char-equal)
+                     while start
+                     do (setf string
+                              (concatenate 'string
+                                           (subseq string 0 start)
+                                           replacement
+                                           (subseq string (+ start (length pattern)))))
+                     finally (return string))))
+      ;; Cheap, conservative redactions for tokens often pasted into prompts.
+      (setf out (replace-all out "OPENROUTER_API_KEY=" "OPENROUTER_API_KEY=***"))
+      (let ((markers '("sk-" "sk-or-")))
+        (dolist (marker markers)
+          (loop with start = 0
+                for pos = (search marker out :start2 start)
+                while pos
+                do (let* ((end pos)
+                          (limit (length out)))
+                     (loop for i from pos below limit
+                           while (or (alphanumericp (char out i))
+                                     (find (char out i) "-_"))
+                           do (setf end (1+ i)))
+                     (setf out (concatenate 'string
+                                            (subseq out 0 pos)
+                                            marker
+                                            "***"
+                                            (subseq out end))
+                           start (+ pos (length marker) 3))))))
+      out)))
 
-User prompts, assistant text, tool commands/results, and arbitrary failures can
-contain credentials or private repository data, so they never enter session
-JSONL files."
+(defun truncate-interaction-log-text (text &optional (limit *interaction-log-content-limit*))
+  "Truncate TEXT to LIMIT characters for JSONL payloads."
+  (let ((s (scrub-interaction-log-text text)))
+    (if (and (integerp limit) (> (length s) limit))
+        (concatenate 'string (subseq s 0 limit) "...[truncated]")
+        s)))
+
+(defun interaction-log-content-field-p (key)
+  "True when KEY is a textual traffic field that may hold user/model content."
+  (member key '(:content :message :command :output :arguments :text
+                :request-json :response-text :tool-result :followup-content
+                :body-snippet :error-message :file)
+          :test #'eq))
+
+(defun safe-interaction-log-fields (fields)
+  "Filter/normalize FIELDS for a durable diagnostic log.
+
+Always allow-lists compact metadata. When *INTERACTION-LOG-RECORD-CONTENT* is
+true, also retains scrubbed/truncated traffic text (prompts, assistant output,
+tool commands/results, provider summaries) so JSONL can reconstruct model <->
+harness back-and-forth. Secret-looking substrings are scrubbed."
   (loop for (key value) on fields by #'cddr
-        when (or (and (member key '(:model :mode :tool :reason :command-name) :test #'eq)
-                      (safe-interaction-label-p value))
-                 (and (member key '(:max-rounds :output-length :exit-status :turn) :test #'eq)
-                      (integerp value))
-                 (and (eq key :failed-turn-p) (typep value 'boolean))
-                 (and (eq key :duration-seconds)
-                      (numberp value)))
-          append (list key value)))
+        append
+        (cond
+          ((and (member key '(:model :mode :tool :reason :command-name :source
+                              :initiator :status :finish-reason :role
+                              :provider-request-id)
+                        :test #'eq)
+                (or (safe-interaction-label-p value)
+                    (and (stringp value) (plusp (length value)) (<= (length value) 200))))
+           (list key value))
+          ((and (member key '(:max-rounds :output-length :exit-status :turn
+                              :queue-length :round :message-count :tool-call-count
+                              :prompt-tokens :completion-tokens :total-tokens
+                              :status-code :file-count
+                              :loaded-file-count :total-file-count)
+                        :test #'eq)
+                (integerp value))
+           (list key value))
+          ((and (eq key :failed-turn-p) (typep value 'boolean))
+           (list key value))
+          ((and (member key '(:duration-seconds :timeout-seconds) :test #'eq)
+                (numberp value))
+           (list key value))
+          ((and (eq key :tool-names) (listp value)
+                (every #'stringp value))
+           (list key value))
+          ((and *interaction-log-record-content*
+                (interaction-log-content-field-p key)
+                (or (stringp value) (pathnamep value) (numberp value) (symbolp value)))
+           (list key (truncate-interaction-log-text value)))
+          (t nil))))
 
 (defun interaction-event-type (event)
   "Map an internal lifecycle EVENT name to a Claude-like top-level type string."
   (cond
-    ((member event '("turn-received" "turn-submitted" "turn-empty") :test #'string=)
+    ((member event '("turn-received" "turn-submitted" "turn-empty"
+                     "synthetic-followup-started")
+             :test #'string=)
      "user")
     ((member event '("turn-completed") :test #'string=)
      "assistant")
-    ((member event '("tool-call" "tool-completed" "tool-failed") :test #'string=)
+    ((member event '("tool-call" "tool-completed" "tool-failed"
+                     "provider-request" "provider-response"
+                     "provider-request-failed" "provider-http-error"
+                     "reload-started" "reload-progress" "reload-completed"
+                     "reload-failed")
+             :test #'string=)
      "tool")
     (t
-     ;; session-*, command-completed, turn-failed, and unknown lifecycle names
+     ;; session-*, command-completed, turn-failed, synthetic schedule, etc.
      "system")))
 
 (defun claude-json-name (keyword)
@@ -203,13 +302,24 @@ transcript envelopes use camelCase keys such as parentUuid and sessionId."
     (t value)))
 
 (defun build-interaction-record (level event fields)
-  "Build one Claude-style session JSONL record (keyword plist) for EVENT."
+  "Build one Claude-style session JSONL record (keyword plist) for EVENT.
+
+Includes top-level INITIATOR (human|harness|command) so operators can filter
+synthetic follow-ups from human turns without parsing message text."
   (let* ((record-uuid (uuid-v4-string))
          (parent *interaction-parent-uuid*)
          (type (interaction-event-type event))
-         (safe (safe-interaction-log-fields fields))
+         (initiator
+           (or (getf fields :initiator)
+               *interaction-turn-initiator*
+               "human"))
+         (safe (safe-interaction-log-fields
+                (if (getf fields :initiator)
+                    fields
+                    (append fields (list :initiator initiator)))))
          (payload (append (list :event event
-                                :level (string-downcase (symbol-name level)))
+                                :level (string-downcase (symbol-name level))
+                                :initiator initiator)
                           (when *interaction-turn-number*
                             (list :turn *interaction-turn-number*))
                           safe)))
@@ -219,17 +329,22 @@ transcript envelopes use camelCase keys such as parentUuid and sessionId."
                   :parent-uuid parent
                   :session-id (or *interaction-log-file-id* *interaction-session-id*)
                   :timestamp (interaction-log-timestamp)
-                  :is-sidechain nil)
+                  :is-sidechain nil
+                  :initiator initiator)
             (when *interaction-turn-number*
               (list :turn *interaction-turn-number*))
             (list :payload payload))))
 
 (defun log-interaction (level event &rest fields)
-  "Append one sanitized Claude-style JSONL interaction record when logging is configured.
+  "Append one Claude-style JSONL interaction record when logging is configured.
 
-Records are written to agent-logs/$ISO-TIMESTAMP.jsonl under the workspace (one file per session). The
-shape mirrors Claude Code session transcripts (type/uuid/parentUuid/sessionId/
-timestamp/payload) while retaining this harness's allow-listed metadata only."
+Records are written to agent-logs/$ISO-TIMESTAMP.jsonl under the workspace (one
+file per session). Shape mirrors Claude Code session transcripts
+(type/uuid/parentUuid/sessionId/timestamp/initiator/payload).
+
+INITIATOR is recorded at the top level and inside payload (human|harness|command).
+When *INTERACTION-LOG-RECORD-CONTENT* is true, scrubbed traffic text is included
+so model <-> harness back-and-forth is reconstructable from JSONL."
   (when *interaction-log-path*
     (unless *interaction-log-file-id*
       (setf *interaction-log-file-id* (ensure-session-file-id *interaction-session-id*)))

@@ -48,20 +48,89 @@ prompt chrome) and false for one-shot mode."
     (write-final-response-outcome :rounds rounds :duration-seconds duration)
     response))
 
+(defun run-synthetic-followup-turn (session content)
+  "Run one automatic follow-up user turn and print its outcome.
+
+CONTENT is injected as a normal user message so OPTIONS/HANDLERS re-resolve and
+the provider sees any tools registered before RELOAD-HARNESS completed. Errors
+are reported like interactive turns and do not abort the session.
+
+Console markers are intentionally loud so operators can see harness-initiated
+turns without reading JSONL. JSONL records set initiator=harness."
+  (format *error-output* "~%")
+  (format *error-output* "================================================================~%")
+  (format *error-output* "SYNTHETIC_FOLLOWUP begin initiator=harness source=queue~%")
+  (format *error-output* "SYNTHETIC_FOLLOWUP content=~S~%"
+          (if (and (stringp content) (> (length content) 240))
+              (concatenate 'string (subseq content 0 240) "...")
+              content))
+  (format *error-output* "================================================================~%")
+  (finish-output *error-output*)
+  (log-interaction :info "synthetic-followup-started"
+                   :initiator "harness"
+                   :source "queue"
+                   :content content)
+  (let ((*interaction-turn-initiator* "harness"))
+    (handler-case
+        (let* ((start (get-internal-real-time))
+               (response (chat-session-turn session content)))
+          (report-completed-chat-turn session start response :leading-newline t)
+          (format *error-output* "SYNTHETIC_FOLLOWUP end initiator=harness status=ok~%")
+          (finish-output *error-output*)
+          (log-interaction :info "synthetic-followup-completed"
+                           :initiator "harness"
+                           :status "ok")
+          response)
+      (error (condition)
+        (note-chat-session-failure session)
+        (format *error-output*
+                "~%TURN_FAILED: synthetic follow-up: ~A; session continues and prior history is retained.~%"
+                condition)
+        (format *error-output* "SYNTHETIC_FOLLOWUP end initiator=harness status=error~%")
+        (finish-output *error-output*)
+        (log-interaction :error "synthetic-followup-failed"
+                         :initiator "harness"
+                         :status "error"
+                         :message (princ-to-string condition))
+        nil))))
+
+(defun maybe-run-synthetic-followup-turns (session)
+  "Drain at most one pending synthetic follow-up for SESSION.
+
+Only one auto turn runs per call so a follow-up that reloads again cannot
+chain forever here. Additional queued items remain for a later call. While the
+follow-up runs, new SCHEDULE-SYNTHETIC-FOLLOWUP calls are suppressed."
+  (let ((content (take-next-synthetic-followup)))
+    (when content
+      (format *error-output*
+              "SYNTHETIC_FOLLOWUP dequeue remaining=~D~%"
+              (length *pending-synthetic-followups*))
+      (finish-output *error-output*)
+      (let ((*suppress-synthetic-followup-scheduling* t))
+        (run-synthetic-followup-turn session content)))))
+
 (defun process-interactive-user-turn (session input)
   "Run one non-command interactive user turn and print its outcome.
 
 Called by name from RUN-INTERACTIVE each loop iteration so reload_harness can
 replace timing/outcome behavior mid-session. Errors are recorded on SESSION and
-reported on stderr without aborting the interactive loop."
+reported on stderr without aborting the interactive loop.
+
+After a successful primary turn (and also after a failed one that may still have
+scheduled work), run at most one pending synthetic follow-up turn so reload +
+new tool registration can continue without another human message."
   (handler-case
       (let* ((start (get-internal-real-time))
              (response (chat-session-turn session input)))
-        (report-completed-chat-turn session start response :leading-newline t))
+        (report-completed-chat-turn session start response :leading-newline t)
+        (maybe-run-synthetic-followup-turns session)
+        response)
     (error (condition)
       (note-chat-session-failure session)
       (format *error-output*
               "~%TURN_FAILED: ~A; session continues and prior history is retained.~%"
               condition)
       (finish-output *error-output*)
+      ;; Still allow a follow-up if reload succeeded before the primary turn failed.
+      (maybe-run-synthetic-followup-turns session)
       nil)))

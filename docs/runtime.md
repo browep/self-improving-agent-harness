@@ -52,7 +52,9 @@ Prompts, assistant text, tool commands/results, and arbitrary failure details
 are excluded because they can contain credentials or private repository data. A
 nonzero `run_shell` command is still returned to the model as a tool result with
 its exit status and combined output, so the model can explain or correct it
-without aborting the turn.
+without aborting the turn. `run_shell` defaults to a 60-second wall-clock
+timeout (optional `timeout` argument); timed-out commands are terminated and
+reported with a clear timeout message.
 
 `bin/container` still mounts the named Docker volume
 `self-improving-agent-harness-logs` at `/logs` for compatibility, but chat no

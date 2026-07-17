@@ -189,19 +189,30 @@ session. Captured function objects stay frozen until the session is rebuilt."
       (error "Tool ~S supplied invalid JSON arguments." (getf tool-call :name)))))
 
 (defun openrouter-tool-result-message (tool-call handlers)
-  (let ((handler (openrouter-tool-handler handlers (getf tool-call :name))))
+  (let* ((name (getf tool-call :name))
+         (handler (openrouter-tool-handler handlers name)))
     (unless handler
-      (error "No handler is registered for tool ~S." (getf tool-call :name)))
+      (error "No handler is registered for tool ~S." name))
     (let* ((arguments (openrouter-tool-arguments tool-call))
+           (arg-text
+             (handler-case
+                 (with-output-to-string (stream)
+                   (yason:encode arguments stream))
+               (error () (princ-to-string (getf tool-call :arguments)))))
            (result
              (handler-case
                  (funcall handler arguments)
                (error ()
-                 (format nil "TOOL_ERROR: Tool ~A failed."
-                         (getf tool-call :name))))))
+                 (format nil "TOOL_ERROR: Tool ~A failed." name))))
+           (content (openrouter-tool-result-content result)))
+      (log-interaction :info "tool-completed"
+                       :tool (or name "unknown")
+                       :arguments arg-text
+                       :tool-result (if (stringp content) content (princ-to-string content))
+                       :output-length (if (stringp content) (length content) 0))
       (list :role "tool"
             :tool-call-id (getf tool-call :id)
-            :content (openrouter-tool-result-content result)))))
+            :content content))))
 
 (defun response-accounting-value (response usage-key)
   "Return USAGE-KEY only when this response supplies a numeric actual value."
@@ -279,48 +290,206 @@ handler implementations mid-session.
 
 MAX-ROUNDS is the effective tool-call round limit (no multiplier). The third
 return value is the ordered provider-response trace required by the supervisor
-accounting boundary; callers that only consume two values are unchanged."
+accounting boundary; callers that only consume two values are unchanged.
+
+Provider timing: PROVIDER-REQUEST is logged before COMPLETE starts, and
+PROVIDER-RESPONSE includes DURATION-SECONDS so hangs waiting on the API are
+visible even when the process is later killed."
   (let ((effective-max-rounds max-rounds))
-    (labels ((run-next-round (current-request round responses)
-               (let ((response (complete backend current-request)))
-                 (if (null (completion-response-tool-calls response))
-                     (values response
-                             (completion-request-messages current-request)
-                             (nreverse (cons response responses)))
-                     (progn
-                       (when (>= round effective-max-rounds)
-                         (error "Tool-call loop exceeded its ~D round limit."
-                                effective-max-rounds))
-                       (let* ((tool-calls (completion-response-tool-calls response))
-                              (next-messages
-                                (append (completion-request-messages current-request)
-                                        (list (openrouter-assistant-tool-call-message response))
-                                        (mapcar (lambda (tool-call)
-                                                  (openrouter-tool-result-message tool-call handlers))
-                                                tool-calls)))
-                              (next-request
-                                (make-completion-request
-                                 :model (completion-request-model current-request)
-                                 :messages next-messages
-                                 :options (completion-request-options current-request))))
-                         (run-next-round next-request (1+ round)
-                                         (cons response responses))))))))
+    (labels ((tool-names-from-options (options)
+               (let ((tools (getf options :tools)))
+                 (when (listp tools)
+                   (mapcar (lambda (tool)
+                             (or (getf (getf tool :function) :name)
+                                 (getf tool :name)
+                                 "tool"))
+                           tools))))
+             (log-provider-request (current-request round)
+               (let* ((messages (completion-request-messages current-request))
+                      (names (tool-names-from-options
+                              (completion-request-options current-request))))
+                 (log-interaction :info "provider-request"
+                                  :round round
+                                  :model (completion-request-model current-request)
+                                  :message-count (length messages)
+                                  :tool-names (mapcar #'princ-to-string (or names '()))
+                                  :timeout-seconds
+                                  (or *openrouter-request-timeout-seconds* 0))))
+             (log-provider-response (current-request round response duration-seconds)
+               (let ((tool-calls (completion-response-tool-calls response)))
+                 (log-interaction :info "provider-response"
+                                  :round round
+                                  :model (or (completion-response-model response)
+                                             (completion-request-model current-request))
+                                  :finish-reason (or (completion-response-finish-reason response)
+                                                     "unknown")
+                                  :tool-call-count (length tool-calls)
+                                  :duration-seconds duration-seconds
+                                  :response-text (completion-response-text response)
+                                  :provider-request-id
+                                  (or (completion-response-provider-request-id response)
+                                      "none"))
+                 (dolist (tool-call tool-calls)
+                   (log-interaction :info "tool-call"
+                                    :tool (or (getf tool-call :name) "unknown")
+                                    :arguments (or (getf tool-call :arguments) "{}")
+                                    :round round))))
+             (run-next-round (current-request round responses)
+               (log-provider-request current-request round)
+               (let ((start (get-internal-real-time)))
+                 (handler-case
+                     (let ((response (complete backend current-request)))
+                       (log-provider-response current-request round response
+                                              (elapsed-seconds-since start))
+                       (if (null (completion-response-tool-calls response))
+                           (values response
+                                   (completion-request-messages current-request)
+                                   (nreverse (cons response responses)))
+                           (progn
+                             (when (>= round effective-max-rounds)
+                               (error "Tool-call loop exceeded its ~D round limit."
+                                      effective-max-rounds))
+                             (let* ((tool-calls (completion-response-tool-calls response))
+                                    (next-messages
+                                      (append (completion-request-messages current-request)
+                                              (list (openrouter-assistant-tool-call-message response))
+                                              (mapcar (lambda (tool-call)
+                                                        (openrouter-tool-result-message tool-call handlers))
+                                                      tool-calls)))
+                                    (next-request
+                                      (make-completion-request
+                                       :model (completion-request-model current-request)
+                                       :messages next-messages
+                                       :options (completion-request-options current-request))))
+                               (run-next-round next-request (1+ round)
+                                               (cons response responses))))))
+                   (error (condition)
+                     (log-interaction :error "provider-request-failed"
+                                      :round round
+                                      :model (completion-request-model current-request)
+                                      :duration-seconds (elapsed-seconds-since start)
+                                      :message (princ-to-string condition))
+                     (error condition))))))
       (run-next-round request 0 '()))))
 
+(defparameter *openrouter-request-timeout-seconds* 120
+  "Wall-clock timeout in seconds for one OpenRouter HTTP completion request.
+
+NIL disables the overall timeout. Connection establishment still uses
+*OPENROUTER-CONNECTION-TIMEOUT-SECONDS*. Bound or set at runtime to tune hang
+diagnosis without rebuilding the image.")
+
+(defparameter *openrouter-connection-timeout-seconds* 30
+  "Seconds to wait while establishing the OpenRouter TCP connection.
+
+Passed to Drakma as :CONNECTION-TIMEOUT. NIL means no connection timeout.")
+
+(defparameter *openrouter-error-body-limit* 800
+  "Maximum characters of an OpenRouter error response body retained in logs/errors.")
+
+(defun elapsed-seconds-since (start-internal-real-time)
+  "Return fractional seconds elapsed since START-INTERNAL-REAL-TIME."
+  (/ (float (- (get-internal-real-time) start-internal-real-time) 0d0)
+     internal-time-units-per-second))
+
+(defun truncate-provider-error-body (text &optional (limit *openrouter-error-body-limit*))
+  "Return TEXT scrubbed to a single-line snippet of at most LIMIT characters."
+  (let* ((raw (if (stringp text) text (princ-to-string text)))
+         (flattened (substitute #\Space #\Newline
+                                (substitute #\Space #\Return raw)))
+         (collapsed
+           (with-output-to-string (out)
+             (let ((previous-space nil))
+               (loop for character across flattened do
+                 (if (char= character #\Space)
+                     (unless previous-space
+                       (write-char #\Space out)
+                       (setf previous-space t))
+                     (progn
+                       (write-char character out)
+                       (setf previous-space nil)))))))
+         (trimmed (string-trim '(#\Space #\Tab) collapsed))
+         (limit (if (and (integerp limit) (plusp limit)) limit 800)))
+    (if (<= (length trimmed) limit)
+        trimmed
+        (concatenate 'string (subseq trimmed 0 (- limit 3)) "..."))))
+
+(defun openrouter-http-error-message (status-code body-text)
+  "Build a concise OpenRouter HTTP error string including a body snippet."
+  (let* ((snippet (truncate-provider-error-body body-text))
+         (suffix (if (plusp (length snippet))
+                     (format nil " body=~S" snippet)
+                     "")))
+    (format nil "OpenRouter request failed with HTTP status ~D.~A"
+            status-code suffix)))
+
+(defun call-with-openrouter-timeout (timeout-seconds thunk)
+  "Run THUNK, optionally aborting after TIMEOUT-SECONDS wall-clock seconds.
+
+On timeout, signal a SIMPLE-ERROR whose message mentions the timeout so chat
+turns can log turn-failed with a diagnosable reason."
+  (cond
+    ((and (realp timeout-seconds) (plusp timeout-seconds))
+     (handler-case
+         (sb-ext:with-timeout timeout-seconds
+           (funcall thunk))
+       (sb-ext:timeout ()
+         (error "OpenRouter request timed out after ~A seconds."
+                timeout-seconds))))
+    (t (funcall thunk))))
+
 (defmethod complete ((backend openrouter-backend) request)
+  "POST REQUEST to OpenRouter with timeout and durable HTTP failure logging.
+
+Successful responses are returned as COMPLETION-RESPONSE values. Transport
+failures log PROVIDER-HTTP-ERROR with duration/status/body snippet before the
+condition is re-signaled for the chat turn failure path."
   (let ((api-key (openrouter-backend-api-key backend)))
     (unless (and (stringp api-key) (plusp (length api-key)))
       (error "OPENROUTER_API_KEY is required for OpenRouter requests."))
-    (multiple-value-bind (body status-code response-headers)
-        (drakma:http-request
-         (openrouter-completions-url backend)
-         :method :post
-         :content (openrouter-request-octets request)
-         :content-type "application/json; charset=utf-8"
-         :additional-headers
-         `(("Authorization" . ,(format nil "Bearer ~A" api-key))))
-      (declare (ignore response-headers))
-      (unless (<= 200 status-code 299)
-        (error "OpenRouter request failed with HTTP status ~D." status-code))
-      (openrouter-response-from-json
-       (yason:parse (openrouter-response-body-string body))))))
+    (let* ((url (openrouter-completions-url backend))
+           (timeout *openrouter-request-timeout-seconds*)
+           (connection-timeout *openrouter-connection-timeout-seconds*)
+           (start (get-internal-real-time)))
+      (handler-case
+          (call-with-openrouter-timeout
+           timeout
+           (lambda ()
+             (multiple-value-bind (body status-code response-headers)
+                 (drakma:http-request
+                  url
+                  :method :post
+                  :content (openrouter-request-octets request)
+                  :content-type "application/json; charset=utf-8"
+                  :connection-timeout connection-timeout
+                  :additional-headers
+                  `(("Authorization" . ,(format nil "Bearer ~A" api-key))))
+               (declare (ignore response-headers))
+               (let* ((body-text (openrouter-response-body-string body))
+                      (duration (elapsed-seconds-since start)))
+                 (unless (<= 200 status-code 299)
+                   (let ((message (openrouter-http-error-message status-code body-text)))
+                     (log-interaction :error "provider-http-error"
+                                      :model (completion-request-model request)
+                                      :status-code status-code
+                                      :duration-seconds duration
+                                      :timeout-seconds (or timeout 0)
+                                      :message message
+                                      :body-snippet
+                                      (truncate-provider-error-body body-text))
+                     (error "~A" message)))
+                 (openrouter-response-from-json (yason:parse body-text))))))
+        (error (condition)
+          ;; Ensure transport/timeout failures always leave a durable breadcrumb
+          ;; even when the caller has not yet logged provider-response.
+          (let* ((text (princ-to-string condition))
+                 (already-logged
+                   (or (search "OpenRouter request failed with HTTP status" text)
+                       (search "provider-http-error" text))))
+            (unless already-logged
+              (log-interaction :error "provider-http-error"
+                               :model (completion-request-model request)
+                               :duration-seconds (elapsed-seconds-since start)
+                               :timeout-seconds (or timeout 0)
+                               :message (truncate-provider-error-body text)))
+            (error condition)))))))

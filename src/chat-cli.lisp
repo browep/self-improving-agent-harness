@@ -37,9 +37,12 @@
 (defun chat-tool-definitions ()
   '((:type "function"
      :function (:name "run_shell"
-                :description "Run a shell command in the harness container and return combined output."
+                :description "Run a shell command in the harness container and return combined stdout/stderr. Optional timeout is wall-clock seconds (default 60); timed-out commands are terminated and reported."
                 :parameters (:type "object"
-                             :properties (:command (:type "string"))
+                             :properties (:command (:type "string"
+                                                    :description "Shell command to run via /bin/sh -lc.")
+                                          :timeout (:type "number"
+                                                    :description "Optional wall-clock timeout in seconds. Defaults to 60. On expiry the command is terminated and a timeout message is returned."))
                              :required ("command"))))
     (:type "function"
      :function (:name "reload_harness"
@@ -48,7 +51,7 @@
 
 (defun chat-options ()
   (list :temperature 0.2
-        :max-tokens 512
+        :max-tokens 4096
         :tools (chat-tool-definitions)))
 
 (defun chat-handlers ()
@@ -128,11 +131,16 @@ CHAT-SESSION-TURN resolve through the global function cell each call."
     (t nil)))
 
 (defun run-one-shot (backend model max-rounds prompt)
-  "Run a single prompt and print the answer plus structured OUTCOME on stderr."
+  "Run a single prompt and print the answer plus structured OUTCOME on stderr.
+
+If the prompt's tool loop schedules a synthetic follow-up (e.g. after
+reload_harness), run that automatic turn before returning."
   (let* ((session (make-cli-chat-session backend model max-rounds))
          (start (get-internal-real-time))
          (response (chat-session-turn session prompt)))
-    (report-completed-chat-turn session start response :leading-newline nil)))
+    (report-completed-chat-turn session start response :leading-newline nil)
+    (maybe-run-synthetic-followup-turns session)
+    response))
 
 (defun write-chat-prompt ()
   "Print the interactive input prompt to stderr using +CHAT-INPUT-PROMPT+.
@@ -181,7 +189,10 @@ Commands: /exit, /quit, /reload, /max-rounds [N]. Ctrl-C also leaves.~%"
 
 Returns :EXIT when the session should end, otherwise NIL. All work is done via
 named global functions so reload_harness can replace command/turn/prompt policy
-between lines without restarting the process."
+between lines without restarting the process.
+
+Slash commands such as /reload may schedule a synthetic follow-up; those run
+here so the model can continue without another human line."
   (cond
     ((eq input :eof) :exit)
     ((interactive-exit-command-p input) :exit)
@@ -190,6 +201,7 @@ between lines without restarting the process."
      (finish-output *error-output*)
      nil)
     ((handle-interactive-command session input)
+     (maybe-run-synthetic-followup-turns session)
      nil)
     (t
      (process-interactive-user-turn session input)

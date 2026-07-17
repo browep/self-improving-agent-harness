@@ -8,8 +8,13 @@
    #:configure-interaction-logging
    #:log-interaction
    #:emit-chat-event
+   #:*interaction-turn-initiator*
+   #:*interaction-log-record-content*
+   #:*interaction-log-content-limit*
    #:run-shell-tool
    #:*run-shell-after-hooks*
+   #:*run-shell-default-timeout-seconds*
+   #:*run-shell-timeout-kill-after-seconds*
    #:report-run-shell-timing
    #:run-run-shell-after-hooks
    #:reload-harness-tool
@@ -69,4 +74,11 @@
    #:resolve-chat-session-options
    #:resolve-chat-session-handlers
    #:ensure-chat-session-system-prompt
-   #:+chat-system-prompt+))
+   #:+chat-system-prompt+
+   #:*pending-synthetic-followups*
+   #:*suppress-synthetic-followup-scheduling*
+   #:schedule-synthetic-followup
+   #:take-next-synthetic-followup
+   #:clear-synthetic-followups
+   #:maybe-run-synthetic-followup-turns
+   #:run-synthetic-followup-turn))

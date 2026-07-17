@@ -203,7 +203,9 @@ continues; normal exit after any failed turn is non-zero. Final assistant conten
 goes to stdout while tool and outcome diagnostics go to stderr. A nonzero
 `run_shell` command returns its exit status and combined output to the model as a
 tool result, allowing it to explain or correct the command rather than aborting
-the chat. `--prompt` retains the existing one-shot exit behavior. Run
+the chat. Commands default to a 60-second wall-clock timeout (override with the
+optional `timeout` argument); timed-out commands are terminated and reported with
+a clear timeout message. `--prompt` retains the existing one-shot exit behavior. Run
 `./bin/chat --help` for defaults and requirements.
 
 ### Supervised chat adapter (#16 lifecycle/evidence slice)

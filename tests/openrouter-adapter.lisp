@@ -128,5 +128,41 @@
                 (self-improving-agent-harness::openrouter-response-body-string
                  #(123 34 105 100 34 58 34 103 101 110 45 49 50 51 34 125))
                 "response decoder converts Drakma octets to UTF-8 text")
+
+  ;; Hang-diagnosis helpers for HTTP error visibility / timeouts.
+  (let ((snippet
+          (self-improving-agent-harness::truncate-provider-error-body
+           (format nil "line1~%line2   extra")
+           20)))
+    (ensure-true (not (find #\Newline snippet))
+                 "provider error body snippets are single-line")
+    (ensure-true (<= (length snippet) 20)
+                 "provider error body snippets honor the character limit"))
+  (let ((message
+          (self-improving-agent-harness::openrouter-http-error-message
+           429
+           "{\"error\":{\"message\":\"Rate limit exceeded\"}}")))
+    (ensure-true (search "HTTP status 429" message)
+                 "HTTP error message includes the status code")
+    (ensure-true (search "Rate limit exceeded" message)
+                 "HTTP error message includes a body snippet"))
+  (handler-case
+      (progn
+        (self-improving-agent-harness::call-with-openrouter-timeout
+         0.05
+         (lambda ()
+           (sleep 1)
+           t))
+        (error "Test failed: openrouter timeout helper must signal on expiry"))
+    (error (condition)
+      (ensure-true (search "timed out" (princ-to-string condition))
+                   "openrouter timeout helper signals a timeout error")))
+  (ensure-equal t
+                (self-improving-agent-harness::call-with-openrouter-timeout
+                 nil
+                 (lambda () t))
+                "nil timeout leaves the thunk result unchanged")
+
   (format t "OpenRouter adapter payload, response, and JSON tests passed.~%")
   t)
+

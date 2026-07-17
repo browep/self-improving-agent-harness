@@ -92,25 +92,42 @@ are recorded in the configured interaction log before being re-signaled.
 
 OPTIONS/HANDLERS designators and +CHAT-SYSTEM-PROMPT+ are re-resolved here so
 reload_harness can update tool wiring and the system prompt for later turns of
-an already-running interactive process."
+an already-running interactive process.
+
+Turn initiator is taken from *INTERACTION-TURN-INITIATOR* (human by default;
+synthetic follow-ups bind it to \"harness\") and written into JSONL."
   (when (and (stringp content) (plusp (length content)))
     ;; Close the interactive prompt separator when armed by WRITE-CHAT-PROMPT.
     ;; Safe no-op for one-shot turns and when the close already ran.
     (when (fboundp 'maybe-write-chat-prompt-closing)
       (maybe-write-chat-prompt-closing))
     (ensure-chat-session-system-prompt session)
-    (log-interaction :info "turn-received" :content content)
+    (log-interaction :info "turn-received"
+                     :initiator *interaction-turn-initiator*
+                     :content content)
     (let* ((messages (append (chat-session-history session)
                              (list (list :role "user" :content content))))
+           (options (resolve-chat-session-options session))
+           (handlers (resolve-chat-session-handlers session))
+           (tool-names
+             (mapcar (lambda (entry)
+                       (if (consp entry) (car entry) entry))
+                     handlers))
            (request (make-completion-request
                      :model (chat-session-model session)
                      :messages messages
-                     :options (resolve-chat-session-options session))))
+                     :options options)))
+      (log-interaction :info "turn-submitted"
+                       :initiator *interaction-turn-initiator*
+                       :model (chat-session-model session)
+                       :message-count (length messages)
+                       :tool-names (mapcar #'princ-to-string tool-names)
+                       :content content)
       (handler-case
           (multiple-value-bind (response continuation-history provider-responses)
               (run-tool-loop (chat-session-backend session)
                              request
-                             (resolve-chat-session-handlers session)
+                             handlers
                              :max-rounds (chat-session-max-rounds session))
             (setf (chat-session-history session)
                   (append continuation-history
@@ -121,11 +138,14 @@ an already-running interactive process."
                   (provider-accounting-summary (chat-session-backend session)
                                                provider-responses))
             (log-interaction :info "turn-completed"
+                             :initiator *interaction-turn-initiator*
                              :model (completion-response-model response)
-                             :content (completion-response-text response))
+                             :content (completion-response-text response)
+                             :round (length provider-responses))
             response)
         (error (condition)
           (log-interaction :error "turn-failed"
+                           :initiator *interaction-turn-initiator*
                            :message (princ-to-string condition))
           (error condition))))))
 
