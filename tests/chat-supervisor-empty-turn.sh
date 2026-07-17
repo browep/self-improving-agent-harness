@@ -4,8 +4,10 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$repo_root/tests/chat-supervisor-fixture.sh"
 output=$(mktemp)
-cleanup() { rm -f "$output"; }
+supervisor_fixture_create "$repo_root"
+cleanup() { rm -f "$output"; supervisor_fixture_cleanup; }
 trap cleanup EXIT HUP INT TERM
 
 if ! printf '%s\n' \
@@ -14,10 +16,10 @@ if ! printf '%s\n' \
   '{"op":"exit"}' |
   timeout 8 env HARNESS_CHAT_RUNNER="$repo_root/tests/fake-supervised-chat-container.sh" \
     "$repo_root/bin/chat-supervisor" \
-      --worktree "$repo_root" \
-      --session-id supervised-empty-16 \
-      --fake \
-      --verify-command '/bin/true' >"$output"; then
+      --create-worktree --repo "$SUPERVISOR_FIXTURE_PRIMARY" --base-ref HEAD \
+      --run-id supervised-empty-16 --worktree-parent "$SUPERVISOR_FIXTURE_PARENT" \
+      --session-id supervised-empty-16 --fake --verify-command '/bin/true' \
+      --report-dir "$SUPERVISOR_FIXTURE_REPORTS/empty-turn" >"$output"; then
   cat "$output" >&2
   printf '%s\n' 'Test failed: empty supervised turn must complete without timing out.' >&2
   exit 1

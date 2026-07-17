@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Structured JSONL adapter for a persistent, machine-stream ``bin/chat`` session.
+"""Supervisor-owned JSONL adapter for isolated, evidence-backed chat sessions.
 
-This narrow supervisor owns transport/correlation and a sanitized initial
-checkpoint. It does not persist transcripts, inspect the shared diagnostic log,
-or estimate provider usage/cost.
+It intentionally never merges, deletes branches/worktrees, persists transcripts,
+raw diffs/logs, command output, credentials, or provider/tool output.
 """
 import argparse
+import html
 import json
 import os
+import re
 import select
 import shlex
 import subprocess
@@ -16,205 +17,290 @@ import time
 from pathlib import Path
 
 TIMEOUT_SECONDS = 300
+REPORT_SCHEMA_VERSION = "chat-supervisor-session-v1"
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def emit(record):
     print(json.dumps(record, separators=(",", ":")), flush=True)
 
 
-def sanitized_checkpoint(worktree, verification_command):
-    def git_result(arguments):
-        return subprocess.run(
-            ["git", *arguments], cwd=worktree, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, timeout=TIMEOUT_SECONDS, check=False)
+def git(cwd, arguments):
+    return subprocess.run(["git", *arguments], cwd=cwd, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, timeout=TIMEOUT_SECONDS,
+                          check=False)
 
-    status = git_result(["status", "--short"])
-    diff_check = git_result(["diff", "--check"])
-    # This is trusted supervisor configuration, never an agent-supplied tool
-    # argument. Tokenize and run it without a shell.
-    verification = subprocess.run(
-        shlex.split(verification_command), cwd=worktree, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, timeout=TIMEOUT_SECONDS, check=False)
-    # Deliberately retain only state/count/exit codes. Git names, command output,
-    # and chat.log are diagnostic input that can contain sensitive material.
-    return {
-        "git": {
-            "status": ("unavailable" if status.returncode != 0 else
-                       ("changes-present" if status.stdout else "clean")),
-            "entries": len(status.stdout.splitlines()),
-            "status_exit_code": status.returncode,
-            "diff_check": "passed" if diff_check.returncode == 0 else "failed",
-            "diff_check_exit_code": diff_check.returncode,
-        },
-        "verification": {
-            "command": verification_command,
-            "status": "passed" if verification.returncode == 0 else "failed",
-            "exit_code": verification.returncode,
-        },
-        "provider_usage": "unavailable",
-        "provider_cost": "unavailable",
-    }
+
+def absolute(path):
+    return Path(path).resolve()
+
+
+def is_within(child, parent):
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def safe_run_id(run_id):
+    if not RUN_ID_RE.fullmatch(run_id or ""):
+        raise RuntimeError("invalid-run-id")
+    return run_id
+
+
+def safe_text(value):
+    """Only fixed/enumerated evidence strings are admitted into persisted data."""
+    if not isinstance(value, str) or len(value) > 160:
+        return None
+    if re.search(r"(?i)(api[_-]?key|authorization|bearer|password|credential|secret|token|raw|output|response|content|body)", value):
+        return None
+    return value if re.fullmatch(r"[A-Za-z0-9 .,:/_+()=-]+", value) else None
+
+
+def registered_worktrees(repo):
+    listing = git(repo, ["worktree", "list", "--porcelain"])
+    if listing.returncode:
+        raise RuntimeError("worktree-registration-unavailable")
+    worktrees = []
+    current = None
+    for line in listing.stdout.splitlines():
+        if line.startswith("worktree "):
+            current = {"path": absolute(line.split(" ", 1)[1])}
+            worktrees.append(current)
+        elif current is not None and line.startswith("branch "):
+            current["branch_ref"] = line.split(" ", 1)[1]
+    if not worktrees:
+        raise RuntimeError("worktree-registration-unavailable")
+    return worktrees
+
+
+def ledger_directory(parent):
+    directory = parent / ".chat-supervisor-runs"
+    if directory.exists() and not directory.is_dir():
+        raise RuntimeError("invalid-run-ledger")
+    directory.mkdir(mode=0o700, exist_ok=True)
+    return directory.resolve()
+
+
+def owned_worktree(args):
+    if not args.create_worktree:
+        return absolute(args.worktree), False, None, None
+    repo = absolute(args.repo)
+    parent = absolute(args.worktree_parent)
+    run_id = safe_run_id(args.run_id)
+    if not repo.is_dir() or git(repo, ["rev-parse", "--is-inside-work-tree"]).returncode != 0:
+        raise RuntimeError("invalid-repository")
+    if not parent.is_dir():
+        raise RuntimeError("invalid-worktree-parent")
+    if git(repo, ["status", "--porcelain"]).stdout:
+        raise RuntimeError("dirty-starting-worktree")
+    primary = registered_worktrees(repo)[0]["path"]
+    if repo != primary:
+        raise RuntimeError("repository-must-be-primary-checkout")
+    # A parent-side ledger makes a run ID single-use and authorizes a later
+    # pre-created invocation without adding an untracked worktree marker.
+    ledger = ledger_directory(parent) / (run_id + ".json")
+    if ledger.exists():
+        raise RuntimeError("duplicate-run-id")
+    branch = "chat-supervisor/%s-%s" % (run_id, int(time.time_ns()))
+    target = parent / ("chat-" + run_id + "-" + branch.rsplit("-", 1)[1])
+    if not is_within(target, parent) or target.exists():
+        raise RuntimeError("unsafe-worktree-path")
+    base = git(repo, ["rev-parse", "--verify", args.base_ref + "^{commit}"])
+    if base.returncode != 0:
+        raise RuntimeError("invalid-base-ref")
+    try:
+        with ledger.open("x", encoding="utf-8") as record:
+            json.dump({"run_id": run_id, "state": "creating"}, record)
+            record.write("\n")
+    except FileExistsError:
+        raise RuntimeError("duplicate-run-id")
+    result = git(repo, ["worktree", "add", "-b", branch, str(target), base.stdout.strip()])
+    if result.returncode != 0:
+        raise RuntimeError("worktree-create-failed")
+    ledger.write_text(json.dumps({"run_id": run_id, "worktree": str(target),
+                                  "branch": branch, "base_commit": base.stdout.strip()}) + "\n",
+                      encoding="utf-8")
+    return target, True, branch, base.stdout.strip()
+
+
+def validate_precreated_worktree(worktree, args):
+    if args.create_worktree:
+        return
+    if not args.worktree_parent:
+        raise RuntimeError("worktree-parent-required")
+    if not args.run_id:
+        raise RuntimeError("run-id-required")
+    safe_run_id(args.run_id)
+    parent = absolute(args.worktree_parent)
+    if not parent.is_dir() or not is_within(worktree, parent):
+        raise RuntimeError("worktree-outside-configured-parent")
+    worktrees = registered_worktrees(worktree)
+    primary = worktrees[0]["path"]
+    if worktree == primary:
+        raise RuntimeError("primary-checkout-refused")
+    registered = next((entry for entry in worktrees if entry["path"] == worktree), None)
+    if registered is None:
+        raise RuntimeError("unregistered-worktree")
+    if git(worktree, ["status", "--porcelain"]).stdout:
+        raise RuntimeError("dirty-starting-worktree")
+    try:
+        ownership = json.loads((ledger_directory(parent) / (args.run_id + ".json")).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise RuntimeError("unverifiable-worktree-ownership")
+    if (ownership.get("run_id") != args.run_id or
+            absolute(ownership.get("worktree", ".")) != worktree or
+            ownership.get("branch") != git(worktree, ["branch", "--show-current"]).stdout.strip() or
+            registered.get("branch_ref") != "refs/heads/" + ownership.get("branch", "")):
+        raise RuntimeError("unverifiable-worktree-ownership")
+    if git(worktree, ["merge-base", "--is-ancestor", ownership.get("base_commit", ""), "HEAD"]).returncode:
+        raise RuntimeError("invalid-worktree-base")
+
+
+def sanitized_checkpoint(worktree, verification_command):
+    status = git(worktree, ["status", "--short"])
+    diff_check = git(worktree, ["diff", "--check"])
+    diff_stat = git(worktree, ["diff", "--stat"])
+    verification = subprocess.run(shlex.split(verification_command), cwd=worktree,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, timeout=TIMEOUT_SECONDS, check=False)
+    return {"git": {
+        "status": "unavailable" if status.returncode else ("changes-present" if status.stdout else "clean"),
+        "entries": len(status.stdout.splitlines()), "status_exit_code": status.returncode,
+        "diff_check": "passed" if diff_check.returncode == 0 else "failed",
+        "diff_check_exit_code": diff_check.returncode,
+        "diff_stat": "available" if diff_stat.returncode == 0 else "unavailable",
+        "diff_stat_exit_code": diff_stat.returncode,
+        # Deliberately a count only: raw stat contains changed file paths.
+        "diff_stat_lines": len(diff_stat.stdout.splitlines()) if diff_stat.returncode == 0 else 0,
+    }, "verification": {"command": verification_command,
+                            "status": "passed" if verification.returncode == 0 else "failed",
+                            "exit_code": verification.returncode},
+        "provider_usage": "unavailable", "provider_cost": "unavailable"}
 
 
 class ChatProcess:
-    """Child transport with separate ordinary stdin/stdout/stderr pipes."""
-
     def __init__(self, arguments, worktree, session_id):
-        self.process = subprocess.Popen(
-            arguments, cwd=worktree, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, close_fds=True, text=False)
-        self.stdin = self.process.stdin.fileno()
-        self.stdout = self.process.stdout.fileno()
-        self.stderr = self.process.stderr.fileno()
-        self.session_id = session_id
-        self.stderr_buffer = b""
-        self.stdout_buffer = b""
-        self.events = []
-
+        self.process = subprocess.Popen(arguments, cwd=worktree, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, close_fds=True, text=False)
+        self.stdin, self.stdout, self.stderr = self.process.stdin.fileno(), self.process.stdout.fileno(), self.process.stderr.fileno()
+        self.session_id, self.stderr_buffer, self.stdout_buffer, self.events = session_id, b"", b"", []
     def close(self):
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
-            if stream and not stream.closed:
-                stream.close()
-
+            if stream and not stream.closed: stream.close()
     def _consume_stderr(self, chunk):
         self.stderr_buffer += chunk
         while b"\n" in self.stderr_buffer:
-            raw_line, self.stderr_buffer = self.stderr_buffer.split(b"\n", 1)
-            try:
-                event = json.loads(raw_line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
+            raw, self.stderr_buffer = self.stderr_buffer.split(b"\n", 1)
+            try: event = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError): continue
             if event.get("session_id") == self.session_id and event.get("event"):
-                self.events.append(event)
-                emit({"type": "event", **event})
-
+                self.events.append(event); emit({"type": "event", **event})
     def _read_available(self, timeout):
-        descriptors = [fd for fd in (self.stdout, self.stderr) if fd is not None]
-        if not descriptors:
-            return
-        ready, _, _ = select.select(descriptors, [], [], timeout)
-        for descriptor in ready:
-            chunk = os.read(descriptor, 4096)
+        ready, _, _ = select.select([fd for fd in (self.stdout, self.stderr) if fd is not None], [], [], timeout)
+        for fd in ready:
+            chunk = os.read(fd, 4096)
             if not chunk:
-                if descriptor == self.stdout:
-                    self.stdout = None
-                else:
-                    self.stderr = None
-                continue
-            if descriptor == self.stdout:
-                self.stdout_buffer += chunk
-            else:
-                self._consume_stderr(chunk)
-
-    def read_stdout_through(self, expected_bytes):
-        """Block until the completed turn's exact raw UTF-8 byte count arrives."""
-        if not isinstance(expected_bytes, int) or isinstance(expected_bytes, bool) or expected_bytes < 0:
-            raise RuntimeError("turn-completed event has invalid assistant_bytes")
-        deadline = time.monotonic() + TIMEOUT_SECONDS
-        while len(self.stdout_buffer) < expected_bytes:
-            if self.stdout is None:
-                raise RuntimeError("chat child closed stdout before completed assistant bytes")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise RuntimeError("timed out waiting for completed assistant bytes")
-            self._read_available(min(0.2, remaining))
-        if len(self.stdout_buffer) != expected_bytes:
-            raise RuntimeError("chat child wrote more assistant bytes than turn-completed declared")
-
-    def wait_for_event(self, names, start_index=0):
-        if isinstance(names, str):
-            names = {names}
-        else:
-            names = set(names)
-        deadline = time.monotonic() + TIMEOUT_SECONDS
-        index = start_index
+                if fd == self.stdout: self.stdout = None
+                else: self.stderr = None
+            elif fd == self.stdout: self.stdout_buffer += chunk
+            else: self._consume_stderr(chunk)
+    def wait_for_event(self, names, start=0):
+        names = {names} if isinstance(names, str) else set(names); deadline = time.monotonic() + TIMEOUT_SECONDS; index = start
         while time.monotonic() < deadline:
             while index < len(self.events):
-                event = self.events[index]
-                index += 1
-                if event.get("event") in names:
-                    return event
-            self._read_available(max(0, min(0.2, deadline - time.monotonic())))
-            if self.process.poll() is not None and self.stdout is None and self.stderr is None:
-                raise RuntimeError("chat child exited before expected event")
-        raise RuntimeError("timed out waiting for chat event")
-
+                event = self.events[index]; index += 1
+                if event.get("event") in names: return event
+            self._read_available(min(.2, max(0, deadline-time.monotonic())))
+        raise RuntimeError("timed-out-waiting-for-chat-event")
     def submit_turn(self, text):
-        self.stdout_buffer = b""
-        event_index = len(self.events)
-        os.write(self.stdin, text.encode("utf-8") + b"\n")
-        # A submitted input is terminally resolved by one of these events. In
-        # particular, empty and failed turns intentionally do not have an
-        # assistant stdout payload, so waiting only for turn-completed would
-        # stall the whole JSONL session until its global timeout.
-        event = self.wait_for_event(
-            ("turn-completed", "turn-empty", "turn-failed"), event_index)
+        self.stdout_buffer = b""; index = len(self.events); os.write(self.stdin, text.encode() + b"\n")
+        event = self.wait_for_event(("turn-completed", "turn-empty", "turn-failed"), index)
         if event.get("event") == "turn-completed":
-            self.read_stdout_through(event.get("assistant_bytes"))
+            expected = event.get("assistant_bytes")
+            if not isinstance(expected, int) or expected < 0: raise RuntimeError("invalid-assistant-bytes")
+            while len(self.stdout_buffer) < expected: self._read_available(.2)
+            if len(self.stdout_buffer) != expected: raise RuntimeError("assistant-byte-framing-failed")
         return event, self.stdout_buffer.decode("utf-8", errors="replace")
-
     def exit(self):
-        event_index = len(self.events)
-        os.write(self.stdin, b"/exit\n")
-        return self.wait_for_event("session-exited", event_index)
+        index = len(self.events); os.write(self.stdin, b"/exit\n"); return self.wait_for_event("session-exited", index)
+
+
+def write_report(report, directory):
+    out = absolute(directory)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    out = out.resolve()
+    json_path, html_path = out / "session.json", out / "session.html"
+    # The directory is the caller's explicit resolved target.  Fixed child
+    # names plus symlink rejection prevent a report write from traversing out.
+    if not is_within(json_path, out) or not is_within(html_path, out):
+        raise RuntimeError("unsafe-report-path")
+    if json_path.is_symlink() or html_path.is_symlink():
+        raise RuntimeError("unsafe-report-path")
+    serialized = json.dumps(report, separators=(",", ":"), sort_keys=True)
+    json_path.write_text(serialized, encoding="utf-8")
+    html_path.write_text("<!doctype html><html><head><meta charset=\"utf-8\"><title>Chat supervisor session report</title></head><body><h1>Chat supervisor session report</h1><pre>" + html.escape(json.dumps(report, indent=2, sort_keys=True)) + "</pre></body></html>", encoding="utf-8")
+    return str(json_path), str(html_path)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Drive persistent bin/chat through JSONL stdin.")
-    parser.add_argument("--worktree", required=True)
-    parser.add_argument("--session-id", required=True)
-    parser.add_argument("--verify-command", required=True,
-                        help="Trusted project verification argv string; run without a shell.")
-    parser.add_argument("--fake", action="store_true", help="Use deterministic no-provider chat backend.")
-    args = parser.parse_args()
-    worktree = str(Path(args.worktree).resolve())
-    if not args.session_id:
-        parser.error("--session-id must not be empty")
-    if not shlex.split(args.verify_command):
-        parser.error("--verify-command must not be empty")
-
-    chat = [str(Path(worktree) / "bin" / "chat"), "--supervised", "--session-id", args.session_id]
-    if args.fake:
-        chat.append("--fake")
-    child = ChatProcess(chat, worktree, args.session_id)
+    p = argparse.ArgumentParser(description="Drive an isolated persistent bin/chat session through JSONL.")
+    p.add_argument("--worktree"); p.add_argument("--create-worktree", action="store_true")
+    p.add_argument("--repo"); p.add_argument("--base-ref"); p.add_argument("--run-id")
+    p.add_argument("--worktree-parent"); p.add_argument("--report-dir")
+    p.add_argument("--session-id", required=True); p.add_argument("--model", default="unavailable")
+    p.add_argument("--verify-command", required=True); p.add_argument("--decision", choices=("retain", "reject"))
+    p.add_argument("--fake", action="store_true"); args = p.parse_args()
+    if not args.session_id or not shlex.split(args.verify_command): p.error("session ID and verification command must not be empty")
+    if not args.report_dir: p.error("--report-dir is required for durable reports")
+    if args.create_worktree:
+        if not all((args.repo, args.base_ref, args.run_id, args.worktree_parent, args.report_dir)): p.error("creation requires repo, base-ref, run-id, worktree-parent, and report-dir")
+    elif not args.worktree: p.error("--worktree is required unless --create-worktree is used")
+    worktree, owned, branch, base_commit = owned_worktree(args)
+    validate_precreated_worktree(worktree, args)
+    if not worktree.is_dir(): raise RuntimeError("invalid-worktree")
+    if is_within(absolute(args.report_dir), worktree): raise RuntimeError("report-dir-inside-worktree")
+    branch = branch or git(worktree, ["branch", "--show-current"]).stdout.strip()
+    base_commit = base_commit or git(worktree, ["rev-parse", "HEAD"]).stdout.strip()
+    report = {"schema_version": REPORT_SCHEMA_VERSION, "task": "unavailable", "session": {"id": args.session_id, "worktree": str(worktree), "branch": branch, "base_commit": base_commit, "owned": owned}, "model_invoked": args.model, "accounting": {"usage": "unavailable", "cost": "unavailable"}, "tool_metadata": "unavailable", "feedback": [], "turns": [], "final_decision": args.decision or "unresolved", "merged": False, "deleted": False}
+    emit({"type":"session-started", **report["session"]})
+    chat = [str(worktree / "bin" / "chat"), "--supervised", "--session-id", args.session_id]
+    if args.fake: chat.append("--fake")
+    child = ChatProcess(chat, str(worktree), args.session_id); pending_feedback = None; turn = 0
     try:
         child.wait_for_event("session-started")
-        turn = 0
-        for raw_line in sys.stdin:
-            try:
-                request = json.loads(raw_line)
-            except json.JSONDecodeError:
-                emit({"type": "error", "code": "invalid-json"})
-                continue
-            operation = request.get("op")
-            if operation == "turn" and isinstance(request.get("text"), str):
-                turn += 1
-                completion, assistant_text = child.submit_turn(request["text"])
-                # The event supplies the exact raw UTF-8 byte framing invariant
-                # used to capture this turn without pipe ordering assumptions.
-                if completion.get("event") == "turn-completed":
-                    emit({"type": "assistant", "session_id": args.session_id,
-                          "turn": turn, "text": assistant_text})
-            elif operation == "checkpoint":
-                emit({"type": "checkpoint", "session_id": args.session_id,
-                      **sanitized_checkpoint(worktree, args.verify_command)})
-            elif operation == "exit":
-                child.exit()
-                return 0
-            else:
-                emit({"type": "error", "code": "invalid-operation"})
-        child.exit()
+        for raw in sys.stdin:
+            try: request = json.loads(raw)
+            except json.JSONDecodeError: emit({"type":"error","code":"invalid-json"}); continue
+            op = request.get("op")
+            if op == "feedback":
+                verdict, evidence, feedback_id = request.get("verdict"), request.get("evidence"), request.get("id")
+                clean = [safe_text(x) for x in evidence] if isinstance(evidence, list) else []
+                if verdict not in ("accept", "reject", "inconclusive") or not isinstance(feedback_id, str) or not clean or any(x is None for x in clean):
+                    emit({"type":"error","code":"invalid-feedback"}); continue
+                feedback = {"id": feedback_id[:64], "verdict": verdict, "evidence": clean}
+                report["feedback"].append(feedback); pending_feedback = feedback["id"]; emit({"type":"feedback", **feedback})
+            elif op == "turn" and isinstance(request.get("text"), str):
+                turn += 1; completion, text = child.submit_turn(request["text"]); evidence = sanitized_checkpoint(str(worktree), args.verify_command)
+                record = {"turn":turn, "event":completion.get("event"), "evaluator_feedback_id":pending_feedback, **evidence}
+                report["turns"].append(record); pending_feedback = None
+                emit({"type":"turn-record", "session_id":args.session_id, **record})
+                if completion.get("event") == "turn-completed": emit({"type":"assistant","session_id":args.session_id,"turn":turn,"text":text})
+            elif op == "checkpoint":
+                evidence = sanitized_checkpoint(str(worktree), args.verify_command); report["turns"].append({"turn":turn, "event":"checkpoint", "evaluator_feedback_id":pending_feedback, **evidence})
+                emit({"type":"checkpoint","session_id":args.session_id,**evidence})
+            elif op == "exit": child.exit(); break
+            else: emit({"type":"error","code":"invalid-operation"})
+        else: child.exit()
+        json_path, html_path = write_report(report, args.report_dir)
+        emit({"type":"session-exited","session_id":args.session_id,"report_json":json_path,"report_html":html_path,"final_decision":report["final_decision"]})
         return 0
     finally:
-        if child.process.poll() is None:
-            child.process.terminate()
-            child.process.wait(timeout=5)
+        if child.process.poll() is None: child.process.terminate(); child.process.wait(timeout=5)
         child.close()
 
-
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except (OSError, RuntimeError, subprocess.TimeoutExpired):
-        emit({"type": "error", "code": "session-failed"})
-        raise SystemExit(1)
+    try: raise SystemExit(main())
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        emit({"type":"error","code":str(error)}); raise SystemExit(1)

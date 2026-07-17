@@ -90,6 +90,32 @@ record.
 Completion criterion: `git -C <worktree> status --short` is clean before the
 first worker turn and the primary checkout remains untouched.
 
+## Supervisor JSONL protocol (#16)
+
+Use the explicit owned lifecycle rather than manually creating a mutable
+worktree. `bin/chat-supervisor --create-worktree --repo REPO --base-ref REF
+--run-id ID --worktree-parent PARENT --report-dir DIR` requires a clean primary
+checkout and creates a unique owned child branch/worktree below `PARENT`. It
+refuses primary checkout use, dirty starts, parent escapes, duplicate run IDs,
+and unverifiable pre-created ownership. It never merges or deletes a branch or
+worktree.
+
+Submit one JSON object per line: `turn` (`text`), `checkpoint`, `feedback`
+(`id`, external `verdict` of accept/reject/inconclusive, and restricted
+structured evidence), then `exit`. A feedback ID is attached only to the next
+turn. Worker output cannot set evaluator fields or a decision. The supervisor
+captures new sanitized status/diff-check/diff-stat plus the named verification
+outcome after each turn/checkpoint. It records state/counts/exit codes only,
+never paths, diff/log/command/provider/tool output, prompts, or credentials.
+
+Normal exit writes paired `session.json` and self-contained `session.html` from
+the same sanitized in-memory record in the explicit ignored report directory;
+the final JSONL event reports both paths. Provider accounting is explicitly
+unavailable unless an authoritative integration provides it. Decision remains
+`unresolved` without an external `--decision`; no artifact means full
+experiment promotion. See `docs/chat-supervisor-protocol.md` for exact limits
+and the invocation example.
+
 ## Start a Persistent Worker
 
 The session requires TTY stdin and stdout. A supervisor should start it through

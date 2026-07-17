@@ -3,8 +3,10 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$repo_root/tests/chat-supervisor-fixture.sh"
 output=$(mktemp)
-cleanup() { rm -f "$output"; }
+supervisor_fixture_create "$repo_root"
+cleanup() { rm -f "$output"; supervisor_fixture_cleanup; }
 trap cleanup EXIT HUP INT TERM
 
 printf '%s\n' \
@@ -13,10 +15,10 @@ printf '%s\n' \
   '{"op":"exit"}' |
   timeout 8 env HARNESS_CHAT_RUNNER="$repo_root/tests/fake-supervisor-protocol-runner.sh" \
     "$repo_root/bin/chat-supervisor" \
-      --worktree "$repo_root" \
-      --session-id supervised-failed-16 \
-      --fake \
-      --verify-command '/bin/true' >"$output"
+      --create-worktree --repo "$SUPERVISOR_FIXTURE_PRIMARY" --base-ref HEAD \
+      --run-id supervised-failed-16 --worktree-parent "$SUPERVISOR_FIXTURE_PARENT" \
+      --session-id supervised-failed-16 --fake --verify-command '/bin/true' \
+      --report-dir "$SUPERVISOR_FIXTURE_REPORTS/failed-turn" >"$output"
 
 python3 - "$output" <<'PY'
 import json

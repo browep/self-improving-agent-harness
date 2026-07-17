@@ -190,29 +190,25 @@ tool result, allowing it to explain or correct the command rather than aborting
 the chat. `--prompt` retains the existing one-shot exit behavior. Run
 `./bin/chat --help` for defaults and requirements.
 
-### Supervised chat adapter (initial #16 slice)
+### Supervised chat adapter (#16 lifecycle/evidence slice)
 
-For a parent process that needs explicit multiple turns, use the narrow JSONL
-adapter from the dedicated session worktree:
+`bin/chat-supervisor` now has an explicit `--create-worktree` mode that creates
+a clean, dedicated branch/worktree below a configured parent from a supplied
+repository, base ref, and unique run ID. It refuses unsafe primary checkouts,
+dirty starts, parent escapes, and duplicate run IDs. It neither merges nor
+deletes anything. Every turn/checkpoint has independently captured sanitized
+Git status/diff-check/diff-stat and named verification outcome. External
+structured evaluator feedback can be linked to the next turn; worker text never
+creates evaluator evidence or a promotion decision. On exit, it writes paired
+versioned JSON and self-contained HTML from one redacted in-memory session
+report in the explicit report directory. Accounting remains `unavailable`
+unless supplied authoritatively; this is not experiment promotion or provider
+cost evidence.
 
-```bash
-printf '%s\n' '{"op":"checkpoint"}' '{"op":"turn","text":"Inspect the task."}' '{"op":"exit"}' |
-  ./bin/chat-supervisor --worktree "$PWD" --session-id run-16 \
-    --verify-command "sg docker -c 'make test'"
-```
-
-It uses separate ordinary pipes with `bin/chat --supervised`; Docker receives
-stdin-only `-i` (never `-t`) so ordinary terminal chat and piped one-shot chat
-retain their existing meanings. Parent output is JSONL: assistant text is a
-distinct `type=assistant` record and lifecycle/turn events are `type=event`; a
-`turn-completed` event is forwarded before its matching assistant record and
-delimits that record's preceding child stdout. A checkpoint reports only
-sanitized Git state/counts,
-`git diff --check`, and verification exit status; it does not copy Git paths,
-command output, or the sensitive shared `chat.log`. Provider usage/cost are
-currently reported as `unavailable`. The adapter does not resume sessions,
-merge, deploy, or treat diagnostic logs as evidence. `--fake` is an offline,
-deterministic test-only backend with no provider call.
+See [`docs/chat-supervisor-protocol.md`](docs/chat-supervisor-protocol.md) for
+the exact JSONL schema, validation limits, safe pre-created-worktree contract,
+and a complete invocation. `--fake` remains an offline deterministic test-only
+backend with no provider call.
 
 For interactive supervision, `--session-id ID` forwards a nonempty caller-owned
 correlation ID. Otherwise `bin/chat` generates a non-secret

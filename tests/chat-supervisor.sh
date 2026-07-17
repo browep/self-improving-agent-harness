@@ -3,8 +3,10 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$repo_root/tests/chat-supervisor-fixture.sh"
 output=$(mktemp)
-cleanup() { rm -f "$output"; }
+supervisor_fixture_create "$repo_root"
+cleanup() { rm -f "$output"; supervisor_fixture_cleanup; }
 trap cleanup EXIT HUP INT TERM
 
 # The protocol is JSONL. The fake child is the real scripts/chat.lisp session
@@ -16,10 +18,10 @@ if ! printf '%s\n' \
   '{"op":"exit"}' |
   env HARNESS_CHAT_RUNNER="$repo_root/tests/fake-supervised-chat-container.sh" \
     "$repo_root/bin/chat-supervisor" \
-      --worktree "$repo_root" \
-      --session-id supervised-test-16 \
-      --fake \
-      --verify-command '/bin/true' >"$output"; then
+      --create-worktree --repo "$SUPERVISOR_FIXTURE_PRIMARY" --base-ref HEAD \
+      --run-id supervised-test-16 --worktree-parent "$SUPERVISOR_FIXTURE_PARENT" \
+      --session-id supervised-test-16 --fake --verify-command '/bin/true' \
+      --report-dir "$SUPERVISOR_FIXTURE_REPORTS/multi-turn" >"$output"; then
   cat "$output" >&2
   exit 1
 fi
