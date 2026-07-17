@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Structured JSONL adapter for a persistent, machine-stream ``bin/chat`` session.
+
+This narrow supervisor owns transport/correlation and a sanitized initial
+checkpoint. It does not persist transcripts, inspect the shared diagnostic log,
+or estimate provider usage/cost.
+"""
+import argparse
+import json
+import os
+import select
+import shlex
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+TIMEOUT_SECONDS = 300
+
+
+def emit(record):
+    print(json.dumps(record, separators=(",", ":")), flush=True)
+
+
+def sanitized_checkpoint(worktree, verification_command):
+    def git_result(arguments):
+        return subprocess.run(
+            ["git", *arguments], cwd=worktree, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, timeout=TIMEOUT_SECONDS, check=False)
+
+    status = git_result(["status", "--short"])
+    diff_check = git_result(["diff", "--check"])
+    # This is trusted supervisor configuration, never an agent-supplied tool
+    # argument. Tokenize and run it without a shell.
+    verification = subprocess.run(
+        shlex.split(verification_command), cwd=worktree, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, timeout=TIMEOUT_SECONDS, check=False)
+    # Deliberately retain only state/count/exit codes. Git names, command output,
+    # and chat.log are diagnostic input that can contain sensitive material.
+    return {
+        "git": {
+            "status": ("unavailable" if status.returncode != 0 else
+                       ("changes-present" if status.stdout else "clean")),
+            "entries": len(status.stdout.splitlines()),
+            "status_exit_code": status.returncode,
+            "diff_check": "passed" if diff_check.returncode == 0 else "failed",
+            "diff_check_exit_code": diff_check.returncode,
+        },
+        "verification": {
+            "command": verification_command,
+            "status": "passed" if verification.returncode == 0 else "failed",
+            "exit_code": verification.returncode,
+        },
+        "provider_usage": "unavailable",
+        "provider_cost": "unavailable",
+    }
+
+
+class ChatProcess:
+    """Child transport with separate ordinary stdin/stdout/stderr pipes."""
+
+    def __init__(self, arguments, worktree, session_id):
+        self.process = subprocess.Popen(
+            arguments, cwd=worktree, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, close_fds=True, text=False)
+        self.stdin = self.process.stdin.fileno()
+        self.stdout = self.process.stdout.fileno()
+        self.stderr = self.process.stderr.fileno()
+        self.session_id = session_id
+        self.stderr_buffer = b""
+        self.stdout_buffer = b""
+        self.events = []
+
+    def close(self):
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+            if stream and not stream.closed:
+                stream.close()
+
+    def _consume_stderr(self, chunk):
+        self.stderr_buffer += chunk
+        while b"\n" in self.stderr_buffer:
+            raw_line, self.stderr_buffer = self.stderr_buffer.split(b"\n", 1)
+            try:
+                event = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if event.get("session_id") == self.session_id and event.get("event"):
+                self.events.append(event)
+                emit({"type": "event", **event})
+
+    def _read_available(self, timeout):
+        descriptors = [fd for fd in (self.stdout, self.stderr) if fd is not None]
+        if not descriptors:
+            return
+        ready, _, _ = select.select(descriptors, [], [], timeout)
+        for descriptor in ready:
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                if descriptor == self.stdout:
+                    self.stdout = None
+                else:
+                    self.stderr = None
+                continue
+            if descriptor == self.stdout:
+                self.stdout_buffer += chunk
+            else:
+                self._consume_stderr(chunk)
+        # A completed turn writes and flushes stdout before its stderr delimiter.
+        # Drain every immediately-ready byte before accepting that delimiter.
+        while True:
+            descriptors = [fd for fd in (self.stdout, self.stderr) if fd is not None]
+            if not descriptors:
+                return
+            ready, _, _ = select.select(descriptors, [], [], 0)
+            if not ready:
+                return
+            for descriptor in ready:
+                chunk = os.read(descriptor, 4096)
+                if not chunk:
+                    if descriptor == self.stdout:
+                        self.stdout = None
+                    else:
+                        self.stderr = None
+                elif descriptor == self.stdout:
+                    self.stdout_buffer += chunk
+                else:
+                    self._consume_stderr(chunk)
+
+    def wait_for_event(self, name, start_index=0):
+        deadline = time.monotonic() + TIMEOUT_SECONDS
+        index = start_index
+        while time.monotonic() < deadline:
+            while index < len(self.events):
+                event = self.events[index]
+                index += 1
+                if event.get("event") == name:
+                    return event
+            self._read_available(max(0, min(0.2, deadline - time.monotonic())))
+            if self.process.poll() is not None and self.stdout is None and self.stderr is None:
+                raise RuntimeError("chat child exited before expected event")
+        raise RuntimeError("timed out waiting for chat event")
+
+    def submit_turn(self, text):
+        self.stdout_buffer = b""
+        event_index = len(self.events)
+        os.write(self.stdin, text.encode("utf-8") + b"\n")
+        event = self.wait_for_event("turn-completed", event_index)
+        return event, self.stdout_buffer.decode("utf-8", errors="replace")
+
+    def exit(self):
+        event_index = len(self.events)
+        os.write(self.stdin, b"/exit\n")
+        return self.wait_for_event("session-exited", event_index)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Drive persistent bin/chat through JSONL stdin.")
+    parser.add_argument("--worktree", required=True)
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--verify-command", required=True,
+                        help="Trusted project verification argv string; run without a shell.")
+    parser.add_argument("--fake", action="store_true", help="Use deterministic no-provider chat backend.")
+    args = parser.parse_args()
+    worktree = str(Path(args.worktree).resolve())
+    if not args.session_id:
+        parser.error("--session-id must not be empty")
+    if not shlex.split(args.verify_command):
+        parser.error("--verify-command must not be empty")
+
+    chat = [str(Path(worktree) / "bin" / "chat"), "--supervised", "--session-id", args.session_id]
+    if args.fake:
+        chat.append("--fake")
+    child = ChatProcess(chat, worktree, args.session_id)
+    try:
+        child.wait_for_event("session-started")
+        turn = 0
+        for raw_line in sys.stdin:
+            try:
+                request = json.loads(raw_line)
+            except json.JSONDecodeError:
+                emit({"type": "error", "code": "invalid-json"})
+                continue
+            operation = request.get("op")
+            if operation == "turn" and isinstance(request.get("text"), str):
+                turn += 1
+                completion, assistant_text = child.submit_turn(request["text"])
+                # The child event is forwarded before this record; it is the
+                # delimiter proving all captured stdout belongs to this turn.
+                if completion.get("event") == "turn-completed":
+                    emit({"type": "assistant", "session_id": args.session_id,
+                          "turn": turn, "text": assistant_text})
+            elif operation == "checkpoint":
+                emit({"type": "checkpoint", "session_id": args.session_id,
+                      **sanitized_checkpoint(worktree, args.verify_command)})
+            elif operation == "exit":
+                child.exit()
+                return 0
+            else:
+                emit({"type": "error", "code": "invalid-operation"})
+        child.exit()
+        return 0
+    finally:
+        if child.process.poll() is None:
+            child.process.terminate()
+            child.process.wait(timeout=5)
+        child.close()
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        emit({"type": "error", "code": "session-failed"})
+        raise SystemExit(1)

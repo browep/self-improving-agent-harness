@@ -190,6 +190,30 @@ tool result, allowing it to explain or correct the command rather than aborting
 the chat. `--prompt` retains the existing one-shot exit behavior. Run
 `./bin/chat --help` for defaults and requirements.
 
+### Supervised chat adapter (initial #16 slice)
+
+For a parent process that needs explicit multiple turns, use the narrow JSONL
+adapter from the dedicated session worktree:
+
+```bash
+printf '%s\n' '{"op":"checkpoint"}' '{"op":"turn","text":"Inspect the task."}' '{"op":"exit"}' |
+  ./bin/chat-supervisor --worktree "$PWD" --session-id run-16 \
+    --verify-command "sg docker -c 'make test'"
+```
+
+It uses separate ordinary pipes with `bin/chat --supervised`; Docker receives
+stdin-only `-i` (never `-t`) so ordinary terminal chat and piped one-shot chat
+retain their existing meanings. Parent output is JSONL: assistant text is a
+distinct `type=assistant` record and lifecycle/turn events are `type=event`; a
+`turn-completed` event is forwarded before its matching assistant record and
+delimits that record's preceding child stdout. A checkpoint reports only
+sanitized Git state/counts,
+`git diff --check`, and verification exit status; it does not copy Git paths,
+command output, or the sensitive shared `chat.log`. Provider usage/cost are
+currently reported as `unavailable`. The adapter does not resume sessions,
+merge, deploy, or treat diagnostic logs as evidence. `--fake` is an offline,
+deterministic test-only backend with no provider call.
+
 For interactive supervision, `--session-id ID` forwards a nonempty caller-owned
 correlation ID. Otherwise `bin/chat` generates a non-secret
 `chat-<UTC timestamp>-<process id>` ID for that invocation. Stderr emits JSONL

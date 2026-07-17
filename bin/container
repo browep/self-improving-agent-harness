@@ -5,7 +5,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 image=${HARNESS_IMAGE:-self-improving-agent-harness:dev}
 network_option=
-interactive_option=
+stdin_option=
 forward_env_options=
 workspace_mount="$repo_root:/workspace:ro"
 
@@ -14,7 +14,13 @@ workspace_mount="$repo_root:/workspace:ro"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --interactive)
-      interactive_option=-it
+      stdin_option=-it
+      shift
+      ;;
+    --stdin-only)
+      # Machine supervisors need stdin without a Docker TTY so stdout/stderr
+      # remain separate ordinary streams.
+      stdin_option=-i
       shift
       ;;
     --no-network)
@@ -47,14 +53,14 @@ docker build --tag "$image" "$repo_root"
 # Docker's --network=none option before the image name.
 if [ -f "$repo_root/.env" ]; then
   if [ "${OPENROUTER_API_KEY+x}" = x ]; then
-    exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init \
+    exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} --rm --init \
       --env-file "$repo_root/.env" --env OPENROUTER_API_KEY \
       --volume "$workspace_mount" \
       --volume self-improving-agent-harness-cache:/cache \
       --volume self-improving-agent-harness-logs:/logs \
       --workdir /workspace "$image" "$@"
   fi
-  exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init \
+  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} --rm --init \
     --env-file "$repo_root/.env" \
     --volume "$workspace_mount" \
     --volume self-improving-agent-harness-cache:/cache \
@@ -63,14 +69,14 @@ if [ -f "$repo_root/.env" ]; then
 fi
 
 if [ "${OPENROUTER_API_KEY+x}" = x ]; then
-  exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init --env OPENROUTER_API_KEY \
+  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} --rm --init --env OPENROUTER_API_KEY \
     --volume "$workspace_mount" \
     --volume self-improving-agent-harness-cache:/cache \
     --volume self-improving-agent-harness-logs:/logs \
     --workdir /workspace "$image" "$@"
 fi
 
-exec docker run ${network_option:-} ${interactive_option:-} ${forward_env_options:-} --rm --init \
+exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} --rm --init \
   --volume "$workspace_mount" \
   --volume self-improving-agent-harness-cache:/cache \
   --volume self-improving-agent-harness-logs:/logs \

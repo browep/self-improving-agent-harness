@@ -4,13 +4,18 @@ set -eu
 
 usage() {
   cat <<'EOF'
-Usage: bin/chat [--model MODEL] [--max-rounds N] [--session-id ID] [--prompt TEXT]
+Usage: bin/chat [--model MODEL] [--max-rounds N] [--session-id ID] [--prompt TEXT] [--supervised] [--fake]
 
 With --prompt, run one prompt through OpenRouter and the harness tool loop until
 it returns a final response. Without --prompt, a terminal stdin/stdout starts
 an interactive multi-turn session; type /exit or /quit, press Ctrl-C, or send EOF to leave.
 Piped stdin remains a one-shot prompt and is never interpreted as a transcript.
 OPENROUTER_API_KEY must be exported or present in .env.
+
+--supervised explicitly forces machine-stream interactive mode for a supervisor.
+It is the only mode that accepts a non-terminal transcript as persistent turns;
+normal terminal and piped one-shot behavior is unchanged. --fake selects the
+deterministic no-provider backend for offline integration tests only.
 
 Defaults:
   --model       openai/gpt-4.1-mini (an exact OpenRouter model ID)
@@ -38,6 +43,8 @@ session_id=
 session_id_supplied=false
 prompt=
 prompt_supplied=false
+supervised=false
+fake_backend=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -54,6 +61,10 @@ while [ "$#" -gt 0 ]; do
     --prompt)
       [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --prompt requires text' >&2; exit 2; }
       prompt=$2; prompt_supplied=true; shift 2 ;;
+    --supervised)
+      supervised=true; shift ;;
+    --fake)
+      fake_backend=true; shift ;;
     *) printf 'bin/chat: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -71,7 +82,9 @@ fi
 
 mode=one-shot
 if [ "$prompt_supplied" = false ]; then
-  if [ ! -t 0 ]; then
+  if [ "$supervised" = true ]; then
+    mode=interactive
+  elif [ ! -t 0 ]; then
     prompt=$(cat)
   elif [ -t 1 ]; then
     mode=interactive
@@ -81,10 +94,14 @@ if [ "$prompt_supplied" = false ]; then
   fi
 fi
 [ "$mode" = interactive ] || [ -n "$prompt" ] || { printf '%s\n' 'bin/chat: prompt must not be empty' >&2; exit 2; }
+if [ "$supervised" = true ] && [ "$prompt_supplied" = true ]; then
+  printf '%s\n' 'bin/chat: --supervised cannot be combined with --prompt' >&2
+  exit 2
+fi
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 container_runner=${HARNESS_CHAT_RUNNER:-"$repo_root/bin/container"}
-if [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$repo_root/.env" ]; then
+if [ "$fake_backend" = false ] && [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$repo_root/.env" ]; then
   printf '%s\n' 'bin/chat: OPENROUTER_API_KEY must be exported or set in .env' >&2
   exit 2
 fi
@@ -93,16 +110,28 @@ export HARNESS_CHAT_MODE=$mode
 export HARNESS_CHAT_MODEL=$model
 export HARNESS_CHAT_MAX_ROUNDS=$max_rounds
 export HARNESS_CHAT_SESSION_ID=$session_id
+if [ "$supervised" = true ]; then
+  export HARNESS_CHAT_STREAM_MODE=supervised
+fi
+if [ "$fake_backend" = true ]; then
+  export HARNESS_CHAT_FAKE_BACKEND=1
+fi
 if [ "$mode" = one-shot ]; then
   export HARNESS_CHAT_PROMPT=$prompt
 fi
 
 if [ "$mode" = interactive ]; then
-  exec "$container_runner" --writable-workspace --interactive \
+  container_interaction=--interactive
+  if [ "$supervised" = true ]; then
+    container_interaction=--stdin-only
+  fi
+  exec "$container_runner" --writable-workspace "$container_interaction" \
     --env HARNESS_CHAT_MODE \
     --env HARNESS_CHAT_MODEL \
     --env HARNESS_CHAT_MAX_ROUNDS \
     --env HARNESS_CHAT_SESSION_ID \
+    --env HARNESS_CHAT_STREAM_MODE \
+    --env HARNESS_CHAT_FAKE_BACKEND \
     --noinform \
     --load scripts/chat.lisp
 fi
@@ -113,5 +142,6 @@ exec "$container_runner" --writable-workspace \
   --env HARNESS_CHAT_MODEL \
   --env HARNESS_CHAT_MAX_ROUNDS \
   --env HARNESS_CHAT_SESSION_ID \
+  --env HARNESS_CHAT_FAKE_BACKEND \
   --noinform \
   --load scripts/chat.lisp

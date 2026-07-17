@@ -18,6 +18,7 @@ Compiled FASLs and ASDF cache data are written to the Docker named volume `self-
 - `make live-smoke`: make one minimal live OpenRouter chat-completions request.
 - `make live-tool-smoke`: make a live tool-capable OpenRouter request using the deterministic `echo` handler.
 - `./bin/chat [--model MODEL] [--max-rounds N] [--session-id ID] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls. Its workspace mount is read-write for `run_shell`; the caller is responsible for reviewing and committing any source changes it makes.
+- `./bin/chat-supervisor --worktree PATH --session-id ID --verify-command COMMAND`: a narrow JSONL parent adapter. It gives `bin/chat --supervised` separate ordinary pipes; that path uses Docker stdin-only `-i`, never a TTY, preserving separate child stdout/stderr while allowing multiple explicit parent turns. Normal terminal chat still uses `-it`, and piped one-shot behavior is unchanged. It is host-side orchestration; chat itself still runs in Docker. `--fake` selects the deterministic no-provider child used by offline tests.
 
 The wrapper rebuilds before every command, relying on Docker layer caching when inputs are unchanged. Set `HARNESS_IMAGE` to use an alternative local tag.
 
@@ -47,8 +48,11 @@ omitted, `bin/chat` generates `chat-<UTC timestamp>-<process id>` locally. The
 generated value is non-secret, stable for that invocation, and intended only to
 correlate its console and diagnostic-log records; it is not a resume token.
 
-In interactive mode stderr includes one JSON object per machine event, alongside
-the existing human prompt/diagnostics. Each event has `event` and `session_id`;
+In normal human interactive mode stderr includes one JSON object per machine
+event alongside the existing prompt/diagnostics. In supervised stream mode,
+stderr contains only standalone JSONL machine events from the chat process and
+stdout contains raw final assistant bytes: no startup prose, prompt, `OUTCOME`,
+or human failure text is emitted. Each event has `event` and `session_id`;
 submitted input is numbered from one and includes `turn`. The lifecycle and turn
 event values are `session-started`, `session-exited`, `turn-submitted`,
 `turn-completed`, `turn-failed`, and `turn-empty`. `session-exited.reason`
@@ -61,6 +65,32 @@ The shared append-only `chat.log` is diagnostic data, not a per-session
 transcript. Its chat interaction records include the available `session_id` and
 `turn` context. It does not record credentials or raw successful tool output,
 but prompts, assistant text, commands, and failures can still be sensitive.
+
+## Supervised JSONL slice
+
+`bin/chat-supervisor` is deliberately an initial, non-resuming supervisor
+protocol, not a transcript store or a promotion mechanism. Its stdin accepts one
+JSON object per line: `{"op":"turn","text":"..."}`, `{"op":"checkpoint"}`,
+and `{"op":"exit"}`. Its stdout returns JSONL with separate
+`{"type":"assistant",...,"text":"..."}` records and forwarded structured
+`{"type":"event",...}` lifecycle/turn records. The matching
+`turn-completed` event is emitted first and delimits the preceding raw child
+stdout bytes used for that assistant record. For example:
+
+```json
+{"type":"event","event":"session-started","session_id":"run-16"}
+{"type":"event","event":"turn-completed","session_id":"run-16","turn":1}
+{"type":"assistant","session_id":"run-16","turn":1,"text":"..."}
+```
+
+An initial `checkpoint` runs `git status --short`, `git diff --check`, and the
+caller-supplied **trusted** verification argv in the supplied worktree. It
+returns only status/count/exit-code summaries and no Git paths, command output,
+or diagnostic-log content. The verification command is tokenized and executed
+without a shell; callers must still supply a safe project verification command
+(normally `sg docker -c 'make test'`). Provider usage and cost are explicitly
+`unavailable` in this slice; the adapter does not estimate them. It never merges,
+deploys, or reads `chat.log` as sanitized evidence.
 
 Inspect the latest entries from the host:
 

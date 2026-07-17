@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes \
-       sbcl ca-certificates \
+       sbcl python3 git ca-certificates \
        cl-drakma cl-yason cl-alexandria cl-trivial-gray-streams \
     && rm -rf /var/lib/apt/lists/*
 
