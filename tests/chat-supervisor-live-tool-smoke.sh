@@ -122,7 +122,10 @@ assert report["turns"][-1]["event"] == "checkpoint"
 assert report["turns"][-1]["verification"]["status"] == "passed"
 assert not report["merged"] and not report["deleted"]
 body = report_json.read_text(encoding="utf-8") + report_html.read_text(encoding="utf-8")
-for forbidden in ("openrouter_api_key", "use run_shell exactly once", "live_tool_smoke_final", "chat-supervisor-live-tool-smoke", "run_shell"):
+# The run/session/worktree identifiers deliberately contain the smoke name, so
+# they are expected lineage data. Only sensitive prompt/final/tool markers must
+# be absent from persisted reports.
+for forbidden in ("openrouter_api_key", "use run_shell exactly once", "live_tool_smoke_final", "run_shell"):
     assert forbidden not in body.lower(), forbidden
 PY
 
