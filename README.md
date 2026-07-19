@@ -187,6 +187,10 @@ three deliberately distinct modes:
 # A supervisor may supply a nonempty correlation ID; otherwise bin/chat generates one locally.
 ./bin/chat --model openai/gpt-4.1-mini --session-id supervisor-session-16
 
+# Resume the most recent interactive session (restores its full prior history).
+./bin/chat -c
+./bin/chat --continue
+
 # One-shot chat.
 ./bin/chat --model openai/gpt-4.1-mini \
   --prompt "Use run_shell to inspect the repository, then summarize it."
@@ -207,6 +211,8 @@ the chat. Commands default to a 60-second wall-clock timeout (override with the
 optional `timeout` argument); timed-out commands are terminated and reported with
 a clear timeout message. `--prompt` retains the existing one-shot exit behavior. Run
 `./bin/chat --help` for defaults and requirements.
+
+`-c` / `--continue` resumes the most recent interactive session. After each successful turn, `bin/chat` writes the full in-memory history (including tool-call and tool-result messages, so replay is lossless) to a per-session snapshot `agent-logs/$SESSION-ID.history.json`. Resuming selects the newest snapshot, restores that history, and adopts its session id, model, and `--max-rounds` (each still overridable on the command line) so resumed turns keep appending to the same session logs. If no snapshot exists (for example a session that predates this feature), `-c` degrades gracefully to a fresh session with a note on stderr.
 
 ### Supervised chat adapter (#16 lifecycle/evidence slice)
 

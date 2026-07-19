@@ -16,6 +16,22 @@ DEFVAR so reload_harness preserves the active logging directory.")
 
 DEFVAR so reload_harness preserves the active log file id.")
 
+(defvar *interaction-text-log-path* nil
+  "Path to the human-readable per-session HTTP `.log` file, or NIL when disabled.
+
+Shares the JSONL session basename with a `.log` extension
+(agent-logs/$ISO-TIMESTAMP.log). DEFVAR (not DEFPARAMETER) so reload_harness
+does not wipe the live session text-log path when src/logging.lisp is reloaded
+mid-chat.")
+
+(defvar *session-history-path* nil
+  "Path to the per-session lossless history snapshot (.history.json), or NIL.
+
+Shares the session basename with the JSONL/text logs. Holds the exact
+CHAT-SESSION-HISTORY message array (roles, content, tool_calls, tool_call_id)
+so BIN/CHAT -c can resume with full tool context. DEFVAR so reload_harness does
+not wipe the live path mid-chat.")
+
 (defvar *interaction-session-id* nil
   "Dynamically bound non-secret correlation ID for interaction diagnostics.
 
@@ -146,6 +162,8 @@ signaling: an unwritable log path must not abort an interactive chat. Returns
 the log path on success, or NIL when logging is disabled or unavailable."
   (setf *interaction-log-directory* nil
         *interaction-log-path* nil
+        *interaction-text-log-path* nil
+        *session-history-path* nil
         *interaction-log-file-id* nil
         *interaction-parent-uuid* nil)
   (when session-id
@@ -154,9 +172,14 @@ the log path on success, or NIL when logging is disabled or unavailable."
       (handler-case
           (let* ((dir (uiop:ensure-directory-pathname directory))
                  (file-id (ensure-session-file-id (or session-id *interaction-session-id*)))
-                 (path (merge-pathnames (session-jsonl-filename file-id) dir)))
+                 (path (merge-pathnames (session-jsonl-filename file-id) dir))
+                 (text-path (merge-pathnames (format nil "~A.log" file-id) dir))
+                 (history-path (merge-pathnames (format nil "~A.history.json" file-id) dir)))
             (ensure-directories-exist path)
             (with-open-file (stream path :direction :output :if-does-not-exist :create
+                                    :if-exists :append :external-format :utf-8)
+              (finish-output stream))
+            (with-open-file (stream text-path :direction :output :if-does-not-exist :create
                                     :if-exists :append :external-format :utf-8)
               (finish-output stream))
             ;; If the caller did not supply a correlation id, use the file timestamp.
@@ -164,11 +187,15 @@ the log path on success, or NIL when logging is disabled or unavailable."
               (setf *interaction-session-id* file-id))
             (setf *interaction-log-file-id* file-id
                   *interaction-log-directory* dir
-                  *interaction-log-path* path)
+                  *interaction-log-path* path
+                  *interaction-text-log-path* text-path
+                  *session-history-path* history-path)
             path)
         (error (condition)
           (setf *interaction-log-directory* nil
                 *interaction-log-path* nil
+                *interaction-text-log-path* nil
+                *session-history-path* nil
                 *interaction-log-file-id* nil)
           (ignore-errors
             (format *error-output*
@@ -243,7 +270,7 @@ the whole chat). RUN-SCRUB-TERMINATION-REGRESSION in tests/logging.lisp guards i
   "True when KEY is a textual traffic field that may hold user/model content."
   (member key '(:content :message :command :output :arguments :text
                 :request-json :response-text :tool-result :followup-content
-                :body-snippet :error-message :file)
+                :body-snippet :error-message :file :request-snippet)
           :test #'eq))
 
 (defun safe-interaction-log-fields (fields)
@@ -258,7 +285,8 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
         (cond
           ((and (member key '(:model :mode :tool :reason :command-name :source
                               :initiator :status :finish-reason :role
-                              :provider-request-id)
+                              :provider-request-id :tool-call-id
+                              :url :url-path :attempt-id :phase :error-class)
                         :test #'eq)
                 (or (safe-interaction-label-p value)
                     (and (stringp value) (plusp (length value)) (<= (length value) 200))))
@@ -267,11 +295,15 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
                               :queue-length :round :message-count :tool-call-count
                               :prompt-tokens :completion-tokens :total-tokens
                               :status-code :file-count
-                              :loaded-file-count :total-file-count)
+                              :loaded-file-count :total-file-count
+                              :request-bytes :body-bytes
+                              :request-chars :body-chars
+                              :connection-timeout-seconds)
                         :test #'eq)
                 (integerp value))
            (list key value))
-          ((and (eq key :failed-turn-p) (typep value 'boolean))
+          ((and (member key '(:failed-turn-p :slow-p) :test #'eq)
+                (typep value 'boolean))
            (list key value))
           ((and (member key '(:duration-seconds :timeout-seconds) :test #'eq)
                 (numberp value))
@@ -297,6 +329,7 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
     ((member event '("tool-call" "tool-completed" "tool-failed"
                      "provider-request" "provider-response"
                      "provider-request-failed" "provider-http-error"
+                     "http-request-started" "http-request-completed"
                      "reload-started" "reload-progress" "reload-completed"
                      "reload-failed")
              :test #'string=)
@@ -388,6 +421,36 @@ so model <-> harness back-and-forth is reconstructable from JSONL."
       (terpri stream)
       (finish-output stream))))
 
+(defun log-http-text (level event format-control &rest args)
+  "Append one human-readable line to the per-session `.log` file when configured.
+
+LEVEL is a keyword (:info/:warn/:error); EVENT is the lifecycle event name.
+FORMAT-CONTROL/ARGS produce the message, which is scrubbed of secrets before
+writing. Line shape:
+
+  <ISO-timestamp> <LEVEL> [session=<id> round=<n> attempt=<id>] <event>: <message>
+
+Writing is best-effort: any failure is swallowed so a text-log problem never
+breaks or aborts a chat turn (FR-1.5)."
+  (when *interaction-text-log-path*
+    (ignore-errors
+      (let* ((message (scrub-interaction-log-text
+                       (apply #'format nil format-control args)))
+             (round (if *interaction-turn-number* *interaction-turn-number* nil)))
+        (with-open-file (stream *interaction-text-log-path*
+                                :direction :output
+                                :if-does-not-exist :create
+                                :if-exists :append
+                                :external-format :utf-8)
+          (format stream "~A ~A [session=~A round=~A] ~A: ~A~%"
+                  (interaction-log-timestamp)
+                  (string-upcase (symbol-name level))
+                  (or *interaction-log-file-id* *interaction-session-id* "-")
+                  (or round "-")
+                  event
+                  message)
+          (finish-output stream))))))
+
 (defun emit-chat-event (event &rest fields)
   "Write one machine-parseable JSONL chat-boundary event to standard error.
 
@@ -406,3 +469,144 @@ stderr."
    *error-output*)
   (terpri *error-output*)
   (finish-output *error-output*))
+
+;;; ---------------------------------------------------------------------------
+;;; Lossless per-session history snapshot (bin/chat -c resume, Track B).
+;;;
+;;; The JSONL diagnostic log truncates content and omits the assistant
+;;; tool_calls array / tool_call_id as first-class fields, so it cannot faithfully
+;;; replay a tool-augmented conversation. Instead we snapshot the exact
+;;; CHAT-SESSION-HISTORY message array (the same plists the OpenRouter API
+;;; consumes) to agent-logs/$ISO-TIMESTAMP.history.json after every successful
+;;; turn. That file is the source of truth for resume.
+
+(defparameter +session-history-schema-version+ 1
+  "Schema version of the .history.json snapshot format.")
+
+(defun session-history-snapshot-object (history &key model max-rounds)
+  "Return a keyword plist describing HISTORY for JSON encoding.
+
+MESSAGES preserves the raw CHAT-SESSION-HISTORY plists (role/content plus any
+tool-calls / tool-call-id), which OPENROUTER-JSON-VALUE renders to snake_case
+(tool_calls, tool_call_id) exactly as the provider API expects."
+  (append (list :schema-version +session-history-schema-version+)
+          (when *interaction-log-file-id*
+            (list :session-id *interaction-log-file-id*))
+          (when model (list :model model))
+          (when (integerp max-rounds) (list :max-rounds max-rounds))
+          (list :saved-at (interaction-log-timestamp)
+                :messages history)))
+
+(defun write-session-history-snapshot (history &key model max-rounds)
+  "Atomically write HISTORY to *SESSION-HISTORY-PATH* as JSON, if configured.
+
+Best-effort: any failure is swallowed so a snapshot problem never aborts a chat
+turn. Writes to a sibling temp file then renames over the target, so a crash
+mid-write cannot leave a half-written snapshot that would corrupt a later
+resume.
+
+Session basenames contain colons and dots (ISO-8601 timestamps), which SBCL's
+NAME/TYPE pathname parsing splits unpredictably. We therefore build the temp and
+final paths as explicit namestrings and rename by namestring, never relying on
+PATHNAME-NAME/PATHNAME-TYPE round-tripping."
+  (when (and *session-history-path* (listp history))
+    (ignore-errors
+      (let* ((final-ns (uiop:native-namestring *session-history-path*))
+             (temp-ns (concatenate 'string final-ns ".tmp"))
+             (object (session-history-snapshot-object
+                      history :model model :max-rounds max-rounds)))
+        (with-open-file (stream temp-ns :direction :output
+                                :if-does-not-exist :create
+                                :if-exists :supersede
+                                :external-format :utf-8)
+          (yason:encode (openrouter-json-value object) stream)
+          (terpri stream)
+          (finish-output stream))
+        ;; POSIX rename(2) is atomic and overwrites the destination. We call
+        ;; it directly (not CL:RENAME-FILE) because SBCL's RENAME-FILE re-parses
+        ;; the target against the source pathname and mangles the multi-dot,
+        ;; colon-bearing ISO-timestamp basenames used here.
+        (sb-posix:rename temp-ns final-ns)
+        *session-history-path*))))
+
+(defun session-history-json-key->keyword (name)
+  "Convert a snake_case JSON message key back to the keyword plist key.
+
+Inverse of OPENROUTER-JSON-NAME for message fields (e.g. \"tool_calls\" ->
+:TOOL-CALLS, \"tool_call_id\" -> :TOOL-CALL-ID, \"role\" -> :ROLE)."
+  (intern (string-upcase (substitute #\- #\_ name)) :keyword))
+
+(defun session-history-json->plist (value)
+  "Recursively convert decoded YASON JSON VALUE into keyword-plist message form.
+
+Hash-tables become keyword plists (snake_case keys un-mangled); lists recurse;
+scalars pass through. Used to restore CHAT-SESSION-HISTORY from a snapshot."
+  (cond
+    ((hash-table-p value)
+     (let ((plist '()))
+       (maphash (lambda (k v)
+                  (push (session-history-json-key->keyword k) plist)
+                  (push (session-history-json->plist v) plist))
+                value)
+       (nreverse plist)))
+    ((listp value) (mapcar #'session-history-json->plist value))
+    (t value)))
+
+(defun read-session-history-snapshot (path)
+  "Read a .history.json snapshot at PATH and return its message plist list.
+
+Returns the restored CHAT-SESSION-HISTORY message list (each a keyword plist),
+or NIL when PATH is missing/unreadable/empty. Signals nothing on a malformed
+file: resume must degrade gracefully."
+  (ignore-errors
+    (when (and path (probe-file path))
+      (with-open-file (stream path :direction :input :external-format :utf-8)
+        (let* ((yason:*parse-object-as* :hash-table)
+               (object (yason:parse stream)))
+          (when (hash-table-p object)
+            (let ((messages (gethash "messages" object)))
+              (when (listp messages)
+                (mapcar #'session-history-json->plist messages)))))))))
+
+(defun read-session-snapshot-metadata (path)
+  "Read a .history.json snapshot and return (VALUES SESSION-ID MODEL MAX-ROUNDS).
+
+Any component is NIL when absent/unreadable. Used by the resume path to adopt
+the prior session's id (so resumed turns append to the same log files), model,
+and tool-loop round limit. Never signals: resume must degrade gracefully."
+  (block nil
+    (handler-case
+        (when (and path (probe-file path))
+          (with-open-file (stream path :direction :input :external-format :utf-8)
+            (let* ((yason:*parse-object-as* :hash-table)
+                   (object (yason:parse stream)))
+              (when (hash-table-p object)
+                (let ((max-rounds (gethash "max_rounds" object)))
+                  (return
+                    (values (gethash "session_id" object)
+                            (gethash "model" object)
+                            (and (integerp max-rounds) max-rounds))))))))
+      (error () nil))
+    (values nil nil nil)))
+
+(defun most-recent-session-snapshot (log-directory)
+  "Return the pathname of the most recent .history.json in LOG-DIRECTORY, or NIL.
+
+Session basenames are ISO-8601 UTC timestamps, which sort lexically in
+chronological order, so the lexically-greatest name is the newest session.
+
+Enumerates every file in the directory and filters by the \".history.json\"
+suffix on its namestring rather than globbing, because the colons/dots in
+session basenames make PATHNAME wildcard matching unreliable."
+  (ignore-errors
+    (let* ((dir (uiop:ensure-directory-pathname log-directory))
+           (candidates
+             (remove-if-not
+              (lambda (p)
+                (let ((name (file-namestring p)))
+                  (and (>= (length name) 13)
+                       (string= ".history.json" name
+                                :start2 (- (length name) 13)))))
+              (uiop:directory-files dir))))
+      (when candidates
+        (first (sort candidates #'string> :key #'file-namestring))))))

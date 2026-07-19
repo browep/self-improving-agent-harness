@@ -4,13 +4,19 @@ set -eu
 
 usage() {
   cat <<'EOF'
-Usage: bin/chat [--model MODEL] [--max-rounds N] [--session-id ID] [--prompt TEXT] [--supervised] [--fake]
+Usage: bin/chat [-c|--continue] [--model MODEL] [--max-rounds N] [--session-id ID] [--prompt TEXT] [--supervised] [--fake]
 
 With --prompt, run one prompt through OpenRouter and the harness tool loop until
 it returns a final response. Without --prompt, a terminal stdin/stdout starts
 an interactive multi-turn session; type /exit or /quit, press Ctrl-C, or send EOF to leave.
 Interactive slash commands: /reload reloads harness sources in-process; /max-rounds [N] shows or sets the live tool-loop limit.
 Piped stdin remains a one-shot prompt and is never interpreted as a transcript.
+
+-c, --continue resumes the most recent session: the latest
+agent-logs/*.history.json snapshot is reloaded as the starting conversation
+(including tool calls and results), and the resumed turns append to that
+session's log files. The snapshot's model and max-rounds are adopted unless you
+also pass --model/--max-rounds. Errors (no snapshot) fall back to a fresh session.
 OPENROUTER_API_KEY must be exported or present in .env.
 
 --supervised explicitly forces machine-stream interactive mode for a supervisor.
@@ -47,10 +53,13 @@ prompt=
 prompt_supplied=false
 supervised=false
 fake_backend=false
+continue_session=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
+    -c|--continue)
+      continue_session=true; shift ;;
     --model)
       [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --model requires a value' >&2; exit 2; }
       model=$2; shift 2 ;;
@@ -78,6 +87,10 @@ esac
 [ -n "$model" ] || { printf '%s\n' 'bin/chat: --model must not be empty' >&2; exit 2; }
 if [ "$session_id_supplied" = true ]; then
   [ -n "$session_id" ] || { printf '%s\n' 'bin/chat: session ID must not be empty' >&2; exit 2; }
+elif [ "$continue_session" = true ]; then
+  # Resume: the Lisp side reads the most recent agent-logs/*.history.json and
+  # adopts its session id so logs continue. Leave session_id empty here.
+  session_id=
 else
   # Per-session files are $ISO-TIMESTAMP.jsonl (UTC, millisecond precision).
   session_id=$(date -u +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null) ||     session_id=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]+"Z")')
@@ -122,6 +135,9 @@ esac
 
 export HARNESS_CHAT_MODE=$mode
 export HARNESS_CHAT_MODEL=$model
+if [ "$continue_session" = true ]; then
+  export HARNESS_CHAT_RESUME=1
+fi
 export HARNESS_CHAT_MAX_ROUNDS=$max_rounds
 export HARNESS_CHAT_SESSION_ID=$session_id
 if [ "$supervised" = true ]; then
@@ -144,6 +160,7 @@ if [ "$mode" = interactive ]; then
     --env HARNESS_CHAT_MODEL \
     --env HARNESS_CHAT_MAX_ROUNDS \
     --env HARNESS_CHAT_SESSION_ID \
+    --env HARNESS_CHAT_RESUME \
     --env HARNESS_CHAT_STREAM_MODE \
     --env HARNESS_CHAT_FAKE_BACKEND \
     --dynamic-space-size "$dynamic_space_mb" \
@@ -157,6 +174,7 @@ exec "$container_runner" --writable-workspace \
   --env HARNESS_CHAT_MODEL \
   --env HARNESS_CHAT_MAX_ROUNDS \
   --env HARNESS_CHAT_SESSION_ID \
+  --env HARNESS_CHAT_RESUME \
   --env HARNESS_CHAT_FAKE_BACKEND \
   --dynamic-space-size "$dynamic_space_mb" \
   --noinform \

@@ -163,6 +163,31 @@
                  (lambda () t))
                 "nil timeout leaves the thunk result unchanged")
 
+  ;; URL logging helpers: host-only vs full path, both credential/query safe.
+  (ensure-equal "https://openrouter.ai"
+                (self-improving-agent-harness::openrouter-log-url
+                 "https://openrouter.ai/api/v1/chat/completions?key=sk-secret")
+                "openrouter-log-url returns host only")
+  (ensure-equal "https://openrouter.ai/api/v1/chat/completions"
+                (self-improving-agent-harness::openrouter-log-url-path
+                 "https://openrouter.ai/api/v1/chat/completions?key=sk-secret#f")
+                "openrouter-log-url-path keeps path, drops query/fragment")
+  (ensure-equal "https://openrouter.ai/api/v1/chat/completions"
+                (self-improving-agent-harness::openrouter-log-url-path
+                 "https://user:sk-secret@openrouter.ai/api/v1/chat/completions")
+                "openrouter-log-url-path strips embedded credentials")
+  (ensure-equal 3
+                (self-improving-agent-harness::openrouter-response-body-bytes
+                 (coerce #(104 105 106) '(vector (unsigned-byte 8))))
+                "openrouter-response-body-bytes counts raw octets")
+  (ensure-equal 3
+                (self-improving-agent-harness::openrouter-response-body-bytes
+                 (sb-ext:string-to-octets "hé" :external-format :utf-8))
+                "openrouter-response-body-bytes counts multibyte octets")
+  (ensure-equal 2
+                (self-improving-agent-harness::openrouter-response-body-bytes "ab")
+                "openrouter-response-body-bytes handles decoded strings")
+
   (format t "OpenRouter adapter payload, response, and JSON tests passed.~%")
   t)
 

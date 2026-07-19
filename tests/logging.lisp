@@ -5,6 +5,11 @@
    (format nil "~A.jsonl" session-id)
    directory))
 
+(defun logging-test-session-text-path (directory session-id)
+  (merge-pathnames
+   (format nil "~A.log" session-id)
+   directory))
+
 (defun only-jsonl-files (directory)
   (remove-if-not
    (lambda (path)
@@ -34,8 +39,123 @@ failure instead of another silent hang."
   (format t "Scrub termination regression passed.~%")
   t)
 
+(defun run-http-logging-tests ()
+  "Verify HTTP-boundary logging: parallel .log sink, attempt-id correlation,
+error phase/class classification, scrubbed request snippet, and no secret leak."
+  (let* ((directory #P"/tmp/self-improving-agent-harness-http-logging-test/")
+         (session-id "2026-01-01T00:00:00.010Z")
+         (jsonl (logging-test-session-path directory session-id))
+         (textlog (logging-test-session-text-path directory session-id)))
+    (when (probe-file directory)
+      (uiop:delete-directory-tree directory :validate t))
+    (unwind-protect
+         (progn
+           ;; FR-1.1/1.2: configuring a directory creates BOTH the .jsonl and .log
+           ;; files sharing the session basename.
+           (self-improving-agent-harness::configure-interaction-logging
+            directory :session-id session-id)
+           (ensure-true (probe-file jsonl) "session .jsonl is created")
+           (ensure-true (probe-file textlog) "parallel .log sink is created")
+           (ensure-true
+            (equal (pathname-name jsonl) (pathname-name textlog))
+            ".log shares the .jsonl basename")
+
+           ;; FR-2/FR-3/FR-4: an in-flight HTTP request event with correlation id
+           ;; and a scrubbed request snippet.
+           (self-improving-agent-harness::log-interaction
+            :info "http-request-started"
+            :attempt-id "attempt-abc" :round 2 :model "test/model"
+            :url "https://openrouter.ai"
+            :url-path "https://openrouter.ai/api/v1/chat/completions"
+            :timeout-seconds 120
+            :connection-timeout-seconds 30 :request-bytes 66 :request-chars 60
+            :request-snippet "OPENROUTER_API_KEY=sk-test-should-scrub payload")
+           (self-improving-agent-harness::log-http-text
+            :info "http-request-started"
+            "attempt=~A model=~A url=~A bytes=~D chars=~D"
+            "attempt-abc" "test/model"
+            "https://openrouter.ai/api/v1/chat/completions" 66 60)
+
+           ;; FR-6: a completed request flagged slow at :warn.
+           (self-improving-agent-harness::log-interaction
+            :warn "http-request-completed"
+            :attempt-id "attempt-abc" :round 2 :status-code 200
+            :duration-seconds 42.5 :body-bytes 1234 :body-chars 1200 :slow-p t)
+           (self-improving-agent-harness::log-http-text
+            :warn "http-request-completed"
+            "attempt=~A status=~D duration=~,3Fs bytes=~D SLOW"
+            "attempt-abc" 200 42.5 1234)
+
+           ;; FR-5: a classified transport failure.
+           (self-improving-agent-harness::log-interaction
+            :error "provider-http-error"
+            :attempt-id "attempt-abc" :round 2 :phase "connect"
+            :error-class "connection-refused-error"
+            :model "test/model" :duration-seconds 0.01
+            :message "Condition USOCKET:CONNECTION-REFUSED-ERROR was signalled.")
+           (self-improving-agent-harness::log-http-text
+            :error "provider-http-error"
+            "attempt=~A phase=~A class=~A" "attempt-abc" "connect"
+            "connection-refused-error")
+
+           (let ((jc (uiop:read-file-string jsonl))
+                 (tc (uiop:read-file-string textlog)))
+             ;; JSONL structured assertions.
+             (ensure-true (search "\"event\":\"http-request-started\"" jc)
+                          "http-request-started is durable in JSONL")
+             (ensure-true (search "\"event\":\"http-request-completed\"" jc)
+                          "http-request-completed is durable in JSONL")
+             (ensure-true (search "\"attemptId\":\"attempt-abc\"" jc)
+                          "attempt-id correlates HTTP events (FR-3)")
+             (ensure-true (search "\"url\":\"https://openrouter.ai\"" jc)
+                          "logged url is host-only (FR-7.2)")
+             (ensure-true (search "\"requestBytes\":66" jc)
+                          "request-bytes retained (FR-4.2)")
+             (ensure-true (search "\"requestChars\":60" jc)
+                          "request-chars retained (character body length)")
+             (ensure-true (search "\"bodyChars\":1200" jc)
+                          "body-chars retained (character body length)")
+             (ensure-true
+              (search "\"urlPath\":\"https://openrouter.ai/api/v1/chat/completions\"" jc)
+              "full url path retained without credentials/query")
+             (ensure-true (search "\"slowP\":true" jc)
+                          "slow-p flag retained (FR-6)")
+             (ensure-true (search "\"phase\":\"connect\"" jc)
+                          "error phase retained (FR-5.2)")
+             (ensure-true (search "\"errorClass\":\"connection-refused-error\"" jc)
+                          "error-class retained (FR-5.3)")
+             (ensure-true (search "\"type\":\"tool\"" jc)
+                          "http-* events map to type=tool (FR-8.1)")
+             ;; FR-4.1/FR-7: request snippet retained but the secret is scrubbed.
+             (ensure-true (search "requestSnippet" jc)
+                          "request snippet retained (FR-4.1)")
+             (ensure-true (not (search "sk-test-should-scrub" jc))
+                          "secret in request snippet is scrubbed (FR-7.3)")
+             ;; Text .log sink assertions (FR-1.4).
+             (ensure-true (search "http-request-started" tc)
+                          ".log records http-request-started")
+             (ensure-true (search "attempt=attempt-abc" tc)
+                          ".log carries the attempt id (FR-1.4)")
+             (ensure-true (search "url=https://openrouter.ai/api/v1/chat/completions" tc)
+                          ".log records the full url path")
+             (ensure-true (search "phase=connect" tc)
+                          ".log records the error phase")
+             (ensure-true (search (format nil "session=~A" session-id) tc)
+                          ".log line carries the session id (FR-1.4)")
+             (ensure-true (not (search "sk-test-should-scrub" tc))
+                          ".log lines are scrubbed of secrets (FR-7.3)")))
+      (self-improving-agent-harness::configure-interaction-logging nil)
+      ;; FR-1.3: disabling clears the text-log path.
+      (ensure-true (null self-improving-agent-harness::*interaction-text-log-path*)
+                   "disabling logging clears the .log path (FR-1.3)")
+      (when (probe-file directory)
+        (uiop:delete-directory-tree directory :validate t))))
+  (format t "HTTP interaction logging tests passed.~%")
+  t)
+
 (defun run-logging-tests ()
   (run-scrub-termination-regression)
+  (run-http-logging-tests)
   (let* ((directory #P"/tmp/self-improving-agent-harness-logging-test/")
          (session-id "2026-01-01T00:00:00.001Z")
          (path (logging-test-session-path directory session-id)))

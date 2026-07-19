@@ -17,7 +17,7 @@ Compiled FASLs and ASDF cache data are written to the Docker named volume `self-
 - `make repl` / `./bin/container --noinform`: build the image and start an interactive SBCL session.
 - `make live-smoke`: make one minimal live OpenRouter chat-completions request.
 - `make live-tool-smoke`: make a live tool-capable OpenRouter request using the deterministic `echo` handler.
-- `./bin/chat [--model MODEL] [--max-rounds N] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls. Its workspace mount is read-write for `run_shell`; the caller is responsible for reviewing and committing any source changes it makes. After editing harness Lisp sources, use the in-process `reload_harness` tool or interactive `/reload` so the running image picks them up; `/max-rounds [N]` changes the live tool-loop limit without restarting.
+- `./bin/chat [-c|--continue] [--model MODEL] [--max-rounds N] [--prompt TEXT]`: with `--prompt`, run one user prompt through the OpenRouter tool loop. With `-c`/`--continue`, resume the most recent interactive session from its per-session history snapshot (see resume note below). With no prompt and terminal stdin/stdout, start the persistent interactive chat session; `/exit`, `/quit`, Ctrl-C, or EOF ends it. Piped stdin is a documented one-shot prompt, never an interactive transcript. The command completes each turn only after the model returns a final response with no tool calls. Its workspace mount is read-write for `run_shell`; the caller is responsible for reviewing and committing any source changes it makes. After editing harness Lisp sources, use the in-process `reload_harness` tool or interactive `/reload` so the running image picks them up; `/max-rounds [N]` changes the live tool-loop limit without restarting.
 
 The wrapper rebuilds before every command, relying on Docker layer caching when inputs are unchanged. Set `HARNESS_IMAGE` to use an alternative local tag.
 
@@ -140,6 +140,28 @@ a terminal-only persistent interactive chat session. The interactive session
 keeps its ordered system/user/assistant/tool history in memory, executes
 `run_shell` and in-process `reload_harness` inside the container, sends matching results back to the model, and
 prints final assistant content. Interactive sessions also accept `/reload` and
-`/max-rounds [N]` without a provider round-trip. It does not provide streaming/SSE, persistent
-transcripts, cross-process resume, or a policy/sandbox layer. `make repl`
+`/max-rounds [N]` without a provider round-trip. It does not provide streaming/SSE,
+persistent transcripts, or a policy/sandbox layer. `make repl`
 remains the raw Docker SBCL REPL; it is not the model-chat interface.
+
+## Cross-process resume (`bin/chat -c`)
+
+Cross-process resume is implemented. After each successful interactive turn,
+the harness atomically writes the full in-memory chat history (including
+`tool_calls`/`tool_call_id` message parts, so replay is lossless) to a
+per-session snapshot `agent-logs/$SESSION-ID.history.json`, alongside the
+session model and tool-loop round limit. Passing `-c`/`--continue` to `bin/chat`
+selects the most recent `.history.json` (session basenames are ISO-8601 UTC
+timestamps, so the lexically-greatest name is newest), restores its message
+history, and adopts the prior session id so the resumed turns keep appending to
+the same JSONL/text logs. It also inherits the snapshot's model and max-rounds
+unless overridden on the command line. When no snapshot exists (or it is
+missing/malformed), resume degrades gracefully to a fresh session with a stderr
+note. Round-trip, most-recent-selection, and missing/malformed cases are covered
+by `tests/resume.lisp`.
+
+Status: the resume implementation currently lives in the working tree and is not
+yet committed. Only sessions that ended after the snapshot writer was added have
+a `.history.json` to resume from; earlier sessions logged only diagnostic JSONL
+(truncated tool traffic, no first-class tool results) and cannot be replayed
+losslessly.

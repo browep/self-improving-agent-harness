@@ -79,4 +79,21 @@ expect_error 2 'OPENROUTER_API_KEY must be exported' \
 expect_error 17 'driver failure propagates' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" HARNESS_FAKE_CONTAINER_STATUS=17 "$repo_root/bin/chat" --prompt x
 
+# -c / --continue sets HARNESS_CHAT_RESUME and leaves the session id empty so the
+# Lisp side can adopt the most recent snapshot's id.
+expect_success 'resume=1' \
+  "$repo_root/bin/chat" -c --prompt 'resume flag check'
+resume_output=$(OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+  "$repo_root/bin/chat" --continue --prompt 'resume long flag')
+case "$resume_output" in
+  *'session-id= resume=1'*) ;;
+  *) printf 'Test failed: -c should leave session-id empty and set resume=1: %s\n' "$resume_output" >&2; exit 1 ;;
+esac
+
+# --help documents -c/--continue.
+case "$help_output" in
+  *'--continue'*) ;;
+  *) printf 'Test failed: help output missing --continue guidance\n' >&2; exit 1 ;;
+esac
+
 printf 'Chat CLI argument and exit-path tests passed.\n'

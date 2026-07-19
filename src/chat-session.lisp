@@ -147,6 +147,14 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                   (chat-session-last-accounting session)
                   (provider-accounting-summary (chat-session-backend session)
                                                provider-responses))
+            ;; Lossless resume snapshot (bin/chat -c). Best-effort and guarded so
+            ;; a missing snapshot path or a mid-turn reload never aborts the turn.
+            (when (fboundp 'write-session-history-snapshot)
+              (ignore-errors
+                (write-session-history-snapshot
+                 (chat-session-history session)
+                 :model (chat-session-model session)
+                 :max-rounds (chat-session-max-rounds session))))
             (log-interaction :info "turn-completed"
                              :initiator *interaction-turn-initiator*
                              :model (completion-response-model response)

@@ -66,17 +66,27 @@ visible to the already-running interactive session."
 (defun make-chat-backend ()
   (make-openrouter-backend :api-key (uiop:getenv "OPENROUTER_API_KEY")))
 
-(defun make-cli-chat-session (backend model max-rounds)
+(defun make-cli-chat-session (backend model max-rounds &key history)
   "Build a CLI chat session that re-resolves options/handlers after reload.
 
 CHAT-OPTIONS and CHAT-HANDLERS are stored as symbols, not as the values they
-currently return. CHAT-SESSION-TURN funcalls those symbols each turn."
-  (make-chat-session
-   :backend backend
-   :model model
-   :options 'chat-options
-   :handlers 'chat-handlers
-   :max-rounds max-rounds))
+currently return. CHAT-SESSION-TURN funcalls those symbols each turn.
+
+When HISTORY is a non-empty message list (from a resumed session snapshot), it
+replaces the fresh single-system-message history so the model sees the full
+prior conversation, including tool calls and tool results. The leading system
+message is realigned to the current +CHAT-SYSTEM-PROMPT+ via
+ENSURE-CHAT-SESSION-SYSTEM-PROMPT."
+  (let ((session (make-chat-session
+                  :backend backend
+                  :model model
+                  :options 'chat-options
+                  :handlers 'chat-handlers
+                  :max-rounds max-rounds)))
+    (when (and history (listp history))
+      (setf (chat-session-history session) history)
+      (ensure-chat-session-system-prompt session))
+    session))
 
 (defun parse-positive-integer (text)
   (let* ((trimmed (string-trim '(#\Space #\Tab) text))
@@ -130,12 +140,13 @@ CHAT-SESSION-TURN resolve through the global function cell each call."
            t))))
     (t nil)))
 
-(defun run-one-shot (backend model max-rounds prompt)
+(defun run-one-shot (backend model max-rounds prompt &key history)
   "Run a single prompt and print the answer plus structured OUTCOME on stderr.
 
 If the prompt's tool loop schedules a synthetic follow-up (e.g. after
-reload_harness), run that automatic turn before returning."
-  (let* ((session (make-cli-chat-session backend model max-rounds))
+reload_harness), run that automatic turn before returning. HISTORY, when
+supplied, seeds the session from a resumed snapshot."
+  (let* ((session (make-cli-chat-session backend model max-rounds :history history))
          (start (get-internal-real-time))
          (response (chat-session-turn session prompt)))
     (report-completed-chat-turn session start response :leading-newline nil)
@@ -218,7 +229,7 @@ This is the long-lived loop frame. Keep it thin: only call helpers by name."
         (return))))
   session)
 
-(defun run-interactive (backend model max-rounds)
+(defun run-interactive (backend model max-rounds &key history)
   "Persistent interactive chat loop.
 
 The loop body intentionally stays thin and calls PROCESS-INTERACTIVE-INPUT,
@@ -230,7 +241,7 @@ command/tool-handler changes hot-reload without restarting chat.
 Still requires process restart: changes to this function's own control flow
 while it is already running, Docker/bin bootstrap, and incompatible
 struct/class layout changes."
-  (let ((session (make-cli-chat-session backend model max-rounds)))
+  (let ((session (make-cli-chat-session backend model max-rounds :history history)))
     (write-interactive-session-banner model max-rounds)
     (handler-bind
         ((sb-sys:interactive-interrupt
@@ -274,6 +285,35 @@ condition would otherwise enter the debugger."
   (setf sb-ext:*invoke-debugger-hook* #'chat-fatal-debugger-hook)
   (values))
 
+(defun snapshot-session-id-from-path (path)
+  "Return the ISO-timestamp session id encoded in a .history.json PATH, or NIL.
+
+The basename is $SESSION-ID.history.json; strip the trailing .history.json."
+  (let* ((name (file-namestring path))
+         (suffix ".history.json"))
+    (when (and (>= (length name) (length suffix))
+               (string= suffix name :start2 (- (length name) (length suffix))))
+      (subseq name 0 (- (length name) (length suffix))))))
+
+(defun resolve-resume-plan (log-directory)
+  "Return a resume plan for the most recent snapshot under LOG-DIRECTORY, or NIL.
+
+The plan is a plist (:session-id :history :model :max-rounds :path). Returns NIL
+when no snapshot exists or it has no usable messages, so the caller can start a
+fresh session instead."
+  (let ((snapshot (most-recent-session-snapshot log-directory)))
+    (when snapshot
+      (let ((history (read-session-history-snapshot snapshot)))
+        (when (and history (listp history))
+          (multiple-value-bind (session-id model max-rounds)
+              (read-session-snapshot-metadata snapshot)
+            (list :session-id (or session-id
+                                  (snapshot-session-id-from-path snapshot))
+                  :history history
+                  :model model
+                  :max-rounds max-rounds
+                  :path snapshot)))))))
+
 (defun run-chat-cli ()
   "Entry point for bin/chat after the system is loaded. Reads HARNESS_* env vars."
   (install-chat-fatal-debugger-hook)
@@ -283,21 +323,47 @@ condition would otherwise enter the debugger."
          (log-directory (or (uiop:getenv "HARNESS_LOG_DIR")
                                "/workspace/agent-logs"))
          (preferred-session-id (uiop:getenv "HARNESS_CHAT_SESSION_ID"))
+         (resume-requested (let ((v (uiop:getenv "HARNESS_CHAT_RESUME")))
+                             (and v (plusp (length v)))))
+         (resume-plan (when resume-requested (resolve-resume-plan log-directory)))
+         (resume-history (getf resume-plan :history))
+         ;; A resumed session adopts the prior snapshot's session id (so its
+         ;; JSONL/text/history files continue), model, and round limit -- those
+         ;; describe the conversation being continued. Fresh sessions keep the
+         ;; env-supplied values.
+         (session-id (or (getf resume-plan :session-id) preferred-session-id))
+         (model (or (getf resume-plan :model) model))
+         (max-rounds (or (getf resume-plan :max-rounds) max-rounds))
          (backend (make-chat-backend)))
     ;; One session JSONL file per process: agent-logs/$ISO-TIMESTAMP.jsonl under
     ;; the workspace bind-mount so hosts can inspect logs without the Docker
     ;; named volume. Non-timestamp supervisor correlation IDs still work for
     ;; stderr events, but the durable log basename is always an ISO-8601 UTC
     ;; timestamp.
-    (configure-interaction-logging log-directory :session-id preferred-session-id)
-    (log-interaction :info "session-start" :mode mode :model model :max-rounds max-rounds)
+    (configure-interaction-logging log-directory :session-id session-id)
+    (when (and resume-requested (null resume-plan))
+      (format *error-output*
+              "~&No resumable session snapshot found under ~A; starting fresh.~%"
+              log-directory)
+      (finish-output *error-output*))
+    (when resume-plan
+      (format *error-output*
+              "~&Resumed session ~A (~D messages) from ~A.~%"
+              (getf resume-plan :session-id)
+              (length resume-history)
+              (file-namestring (getf resume-plan :path)))
+      (finish-output *error-output*))
+    (log-interaction :info "session-start" :mode mode :model model
+                     :max-rounds max-rounds
+                     :reason (if resume-plan "resumed" "fresh"))
     (handler-case
         (cond
           ((string= mode "one-shot")
            (run-one-shot backend model max-rounds
-                         (required-environment "HARNESS_CHAT_PROMPT")))
+                         (required-environment "HARNESS_CHAT_PROMPT")
+                         :history resume-history))
           ((string= mode "interactive")
-           (run-interactive backend model max-rounds))
+           (run-interactive backend model max-rounds :history resume-history))
           (t (error "HARNESS_CHAT_MODE must be one-shot or interactive.")))
       (error (condition)
         (log-interaction :error "session-failed" :message (princ-to-string condition))

@@ -7,5 +7,5 @@ if [ "$status" -ne 0 ]; then
   printf '%s\n' 'driver failure propagates' >&2
   exit "$status"
 fi
-printf 'FAKE_CHAT_DRIVER args=%s mode=%s prompt=%s model=%s max-rounds=%s session-id=%s\n' \
-  "$*" "$HARNESS_CHAT_MODE" "${HARNESS_CHAT_PROMPT:-}" "$HARNESS_CHAT_MODEL" "$HARNESS_CHAT_MAX_ROUNDS" "${HARNESS_CHAT_SESSION_ID:-}"
+printf 'FAKE_CHAT_DRIVER args=%s mode=%s prompt=%s model=%s max-rounds=%s session-id=%s resume=%s\n' \
+  "$*" "$HARNESS_CHAT_MODE" "${HARNESS_CHAT_PROMPT:-}" "$HARNESS_CHAT_MODEL" "$HARNESS_CHAT_MAX_ROUNDS" "${HARNESS_CHAT_SESSION_ID:-}" "${HARNESS_CHAT_RESUME:-}"

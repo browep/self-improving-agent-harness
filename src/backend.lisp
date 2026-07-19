@@ -1,5 +1,12 @@
 (in-package #:self-improving-agent-harness)
 
+;; LOG-INTERACTION and LOG-HTTP-TEXT live in src/logging.lisp, which loads after
+;; this file (logging's EMIT-CHAT-EVENT in turn depends on backend's JSON
+;; helpers, a deliberate mutual reference resolved at runtime). Declare them so
+;; the forward call in COMPLETE does not raise an undefined-function warning.
+(declaim (ftype (function (t t &rest t) t) log-interaction)
+         (ftype (function (t t t &rest t) t) log-http-text))
+
 (defclass backend ()
   ((name :initarg :name :reader backend-name
          :documentation "Stable provider identifier used in experiment traces."))
@@ -143,6 +150,17 @@ the transport layer owns conversion to OpenRouter's JSON field names."
       (map '(vector (unsigned-byte 8)) #'identity body)
       :external-format :utf-8))))
 
+(defun openrouter-response-body-bytes (body)
+  "Return the encoded byte length of Drakma's response BODY.
+
+For an octet vector this is its length; for a decoded string it is the UTF-8
+encoded length. Distinct from BODY-CHARS (decoded character count)."
+  (typecase body
+    (string (length (sb-ext:string-to-octets body :external-format :utf-8)))
+    ((vector (unsigned-byte 8)) (length body))
+    (vector (length body))
+    (t 0)))
+
 (defun coerce-tool-handler (handler name)
   "Return a callable tool handler from HANDLER.
 
@@ -232,6 +250,7 @@ model can narrow the command and re-run it rather than silently losing data."
                      (openrouter-tool-result-content result))))
       (log-interaction :info "tool-completed"
                        :tool (or name "unknown")
+                       :tool-call-id (or (getf tool-call :id) "none")
                        :arguments arg-text
                        :tool-result (if (stringp content) content (princ-to-string content))
                        :output-length (if (stringp content) (length content) 0))
@@ -306,6 +325,32 @@ includes a numeric usage.cost value; partial cost is never summed."
                                    :cost-usd cost :cost-usd-state cost-state
                                    :cost-usd-reason cost-reason))))))))
 
+(defparameter *openrouter-request-timeout-seconds* 120
+  "Wall-clock timeout in seconds for one OpenRouter HTTP completion request.
+
+NIL disables the overall timeout. Connection establishment still uses
+*OPENROUTER-CONNECTION-TIMEOUT-SECONDS*. Bound or set at runtime to tune hang
+diagnosis without rebuilding the image.")
+
+(defparameter *openrouter-connection-timeout-seconds* 30
+  "Seconds to wait while establishing the OpenRouter TCP connection.
+
+Passed to Drakma as :CONNECTION-TIMEOUT. NIL means no connection timeout.")
+
+(defparameter *openrouter-error-body-limit* 800
+  "Maximum characters of an OpenRouter error response body retained in logs/errors.")
+
+(defparameter *openrouter-slow-request-warn-seconds* 30
+  "Elapsed-seconds threshold above which a completed OpenRouter HTTP request is
+flagged as slow (SLOW-P T, logged at :WARN). NIL disables slow-request warnings.
+Tunable at runtime; reload_harness picks up new values.")
+
+(defvar *provider-round* nil
+  "Dynamically bound tool-loop round for the in-flight COMPLETE call, or NIL.
+
+Bound in RUN-TOOL-LOOP so HTTP-boundary events emitted inside COMPLETE can carry
+the round without changing the COMPLETE generic-function signature.")
+
 (defun run-tool-loop (backend request handlers &key (max-rounds 60))
   "Run REQUEST through BACKEND, executing registered tool calls until completion.
 
@@ -363,7 +408,8 @@ visible even when the process is later killed."
                (log-provider-request current-request round)
                (let ((start (get-internal-real-time)))
                  (handler-case
-                     (let ((response (complete backend current-request)))
+                     (let* ((*provider-round* round)
+                            (response (complete backend current-request)))
                        (log-provider-response current-request round response
                                               (elapsed-seconds-since start))
                        (if (null (completion-response-tool-calls response))
@@ -397,20 +443,38 @@ visible even when the process is later killed."
                      (error condition))))))
       (run-next-round request 0 '()))))
 
-(defparameter *openrouter-request-timeout-seconds* 120
-  "Wall-clock timeout in seconds for one OpenRouter HTTP completion request.
+(defun openrouter-log-url (url)
+  "Return a host-only, credential-free form of URL for logging (FR-7.2)."
+  (let* ((s (if (stringp url) url (princ-to-string url)))
+         (scheme-end (search "://" s)))
+    (if scheme-end
+        (let* ((after (+ scheme-end 3))
+               (slash (position #\/ s :start after)))
+          (subseq s 0 (if slash slash (length s))))
+        s)))
 
-NIL disables the overall timeout. Connection establishment still uses
-*OPENROUTER-CONNECTION-TIMEOUT-SECONDS*. Bound or set at runtime to tune hang
-diagnosis without rebuilding the image.")
+(defun openrouter-log-url-path (url)
+  "Return URL with scheme, host, and path but no query string or credentials.
 
-(defparameter *openrouter-connection-timeout-seconds* 30
-  "Seconds to wait while establishing the OpenRouter TCP connection.
-
-Passed to Drakma as :CONNECTION-TIMEOUT. NIL means no connection timeout.")
-
-(defparameter *openrouter-error-body-limit* 800
-  "Maximum characters of an OpenRouter error response body retained in logs/errors.")
+Extends OPENROUTER-LOG-URL (host-only) with the request path so operators can
+see which endpoint was hit, while still honoring FR-7.2: any `user:pass@`
+userinfo and any `?query`/`#fragment` are stripped so no credentials leak."
+  (let* ((s (if (stringp url) url (princ-to-string url)))
+         (scheme-end (search "://" s)))
+    (if scheme-end
+        (let* ((after (+ scheme-end 3))
+               ;; Drop userinfo (anything up to and including an `@` before the
+               ;; first path slash) so credentials never appear.
+               (slash (or (position #\/ s :start after) (length s)))
+               (at (position #\@ s :start after :end slash))
+               (authority-start (if at (1+ at) after))
+               (scheme (subseq s 0 after))
+               (rest (subseq s authority-start))
+               ;; Strip query and fragment.
+               (cut (min (or (position #\? rest) (length rest))
+                         (or (position #\# rest) (length rest)))))
+          (concatenate 'string scheme (subseq rest 0 cut)))
+        s)))
 
 (defun elapsed-seconds-since (start-internal-real-time)
   "Return fractional seconds elapsed since START-INTERNAL-REAL-TIME."
@@ -463,19 +527,76 @@ turns can log turn-failed with a diagnosable reason."
                 timeout-seconds))))
     (t (funcall thunk))))
 
-(defmethod complete ((backend openrouter-backend) request)
-  "POST REQUEST to OpenRouter with timeout and durable HTTP failure logging.
+(defun openrouter-error-phase (condition body-received-p)
+  "Classify CONDITION into an HTTP-boundary phase for PROVIDER-HTTP-ERROR.
 
-Successful responses are returned as COMPLETION-RESPONSE values. Transport
-failures log PROVIDER-HTTP-ERROR with duration/status/body snippet before the
-condition is re-signaled for the chat turn failure path."
+Returns one of \"connect\", \"read-timeout\", \"parse\", or \"unknown\".
+BODY-RECEIVED-P is true once the HTTP response body was read (so a later failure
+is a parse phase, not a transport phase). HTTP-status errors are logged inline
+and never reach this classifier."
+  (cond
+    ;; Our own SB-EXT:WITH-TIMEOUT fired: the whole request exceeded
+    ;; *OPENROUTER-REQUEST-TIMEOUT-SECONDS* while awaiting the response.
+    ((typep condition 'sb-ext:timeout) "read-timeout")
+    ;; Anything that failed before the body was read is a transport/connect
+    ;; problem (connection refused, DNS, socket, or a usocket connect timeout).
+    ((not body-received-p)
+     (let ((name (string-downcase (princ-to-string (type-of condition)))))
+       (if (or (search "connection" name)
+               (search "connect" name)
+               (search "usocket" name)
+               (search "host" name)
+               (search "dns" name)
+               (search "socket" name)
+               (search "timeout" name))
+           "connect"
+           "unknown")))
+    ;; Body was received but a later step (JSON decode) failed.
+    (t "parse")))
+
+(defmethod complete ((backend openrouter-backend) request)
+  "POST REQUEST to OpenRouter with timeout and durable HTTP-boundary logging.
+
+Emits HTTP-REQUEST-STARTED immediately before the blocking transport call and
+HTTP-REQUEST-COMPLETED after it returns (before JSON parse), each carrying an
+ATTEMPT-ID and the tool-loop ROUND, to both the JSONL and text `.log` sinks. A
+process killed mid-hang therefore leaves an HTTP-REQUEST-STARTED with no matching
+completion/error. Transport/HTTP failures log exactly one PROVIDER-HTTP-ERROR
+with PHASE and ERROR-CLASS before the condition is re-signaled.
+
+Successful responses are returned as COMPLETION-RESPONSE values."
   (let ((api-key (openrouter-backend-api-key backend)))
     (unless (and (stringp api-key) (plusp (length api-key)))
       (error "OPENROUTER_API_KEY is required for OpenRouter requests."))
     (let* ((url (openrouter-completions-url backend))
+           (log-url (openrouter-log-url url))
+           (log-url-path (openrouter-log-url-path url))
            (timeout *openrouter-request-timeout-seconds*)
            (connection-timeout *openrouter-connection-timeout-seconds*)
+           (round *provider-round*)
+           (attempt-id (uuid-v4-string))
+           (octets (openrouter-request-octets request))
+           (request-bytes (length octets))
+           (request-json (openrouter-request-json request))
+           (request-chars (if (stringp request-json) (length request-json) 0))
+           (body-received-p nil)
            (start (get-internal-real-time)))
+      (log-interaction :info "http-request-started"
+                       :attempt-id attempt-id
+                       :round (or round 0)
+                       :model (completion-request-model request)
+                       :url log-url
+                       :url-path log-url-path
+                       :timeout-seconds (or timeout 0)
+                       :connection-timeout-seconds (or connection-timeout 0)
+                       :request-bytes request-bytes
+                       :request-chars request-chars
+                       :request-snippet request-json)
+      (log-http-text :info "http-request-started"
+                     "attempt=~A model=~A url=~A timeout=~As conn-timeout=~As bytes=~D chars=~D"
+                     attempt-id (completion-request-model request) log-url-path
+                     (or timeout "none") (or connection-timeout "none")
+                     request-bytes request-chars)
       (handler-case
           (call-with-openrouter-timeout
            timeout
@@ -484,17 +605,41 @@ condition is re-signaled for the chat turn failure path."
                  (drakma:http-request
                   url
                   :method :post
-                  :content (openrouter-request-octets request)
+                  :content octets
                   :content-type "application/json; charset=utf-8"
                   :connection-timeout connection-timeout
                   :additional-headers
                   `(("Authorization" . ,(format nil "Bearer ~A" api-key))))
                (declare (ignore response-headers))
+               (setf body-received-p t)
                (let* ((body-text (openrouter-response-body-string body))
-                      (duration (elapsed-seconds-since start)))
+                      (duration (elapsed-seconds-since start))
+                      (body-bytes (openrouter-response-body-bytes body))
+                      (body-chars (if (stringp body-text) (length body-text) 0))
+                      (slow-p (and (realp *openrouter-slow-request-warn-seconds*)
+                                   (plusp *openrouter-slow-request-warn-seconds*)
+                                   (> duration *openrouter-slow-request-warn-seconds*)))
+                      (level (if slow-p :warn :info)))
+                 (log-interaction level "http-request-completed"
+                                  :attempt-id attempt-id
+                                  :round (or round 0)
+                                  :model (completion-request-model request)
+                                  :status-code status-code
+                                  :duration-seconds duration
+                                  :body-bytes body-bytes
+                                  :body-chars body-chars
+                                  :slow-p (and slow-p t))
+                 (log-http-text level "http-request-completed"
+                                "attempt=~A status=~D duration=~,3Fs bytes=~D chars=~D~A"
+                                attempt-id status-code duration body-bytes body-chars
+                                (if slow-p " SLOW" ""))
                  (unless (<= 200 status-code 299)
                    (let ((message (openrouter-http-error-message status-code body-text)))
                      (log-interaction :error "provider-http-error"
+                                      :attempt-id attempt-id
+                                      :round (or round 0)
+                                      :phase "http-status"
+                                      :error-class "http-status"
                                       :model (completion-request-model request)
                                       :status-code status-code
                                       :duration-seconds duration
@@ -502,19 +647,33 @@ condition is re-signaled for the chat turn failure path."
                                       :message message
                                       :body-snippet
                                       (truncate-provider-error-body body-text))
+                     (log-http-text :error "provider-http-error"
+                                    "attempt=~A phase=http-status status=~D duration=~,3Fs ~A"
+                                    attempt-id status-code duration message)
                      (error "~A" message)))
                  (openrouter-response-from-json (yason:parse body-text))))))
         (error (condition)
-          ;; Ensure transport/timeout failures always leave a durable breadcrumb
-          ;; even when the caller has not yet logged provider-response.
+          ;; Ensure transport/timeout/parse failures always leave a durable
+          ;; breadcrumb. HTTP-status errors were logged inline above; detect and
+          ;; do not double-log them.
           (let* ((text (princ-to-string condition))
-                 (already-logged
-                   (or (search "OpenRouter request failed with HTTP status" text)
-                       (search "provider-http-error" text))))
-            (unless already-logged
-              (log-interaction :error "provider-http-error"
-                               :model (completion-request-model request)
-                               :duration-seconds (elapsed-seconds-since start)
-                               :timeout-seconds (or timeout 0)
-                               :message (truncate-provider-error-body text)))
+                 (http-status-error
+                   (search "OpenRouter request failed with HTTP status" text)))
+            (unless http-status-error
+              (let ((phase (openrouter-error-phase condition body-received-p))
+                    (duration (elapsed-seconds-since start))
+                    (error-class (string-downcase (princ-to-string (type-of condition)))))
+                (log-interaction :error "provider-http-error"
+                                 :attempt-id attempt-id
+                                 :round (or round 0)
+                                 :phase phase
+                                 :error-class error-class
+                                 :model (completion-request-model request)
+                                 :duration-seconds duration
+                                 :timeout-seconds (or timeout 0)
+                                 :message (truncate-provider-error-body text))
+                (log-http-text :error "provider-http-error"
+                               "attempt=~A phase=~A class=~A duration=~,3Fs ~A"
+                               attempt-id phase error-class duration
+                               (truncate-provider-error-body text))))
             (error condition)))))))

@@ -5,8 +5,19 @@
    #:backend-name
    #:complete
    #:run-tool-loop
+   #:*openrouter-request-timeout-seconds*
+   #:*openrouter-connection-timeout-seconds*
+   #:*openrouter-slow-request-warn-seconds*
+   #:*provider-round*
    #:configure-interaction-logging
+   #:*session-history-path*
+   #:write-session-history-snapshot
+   #:read-session-history-snapshot
+   #:read-session-snapshot-metadata
+   #:most-recent-session-snapshot
    #:log-interaction
+   #:log-http-text
+   #:*interaction-text-log-path*
    #:emit-chat-event
    #:*interaction-turn-initiator*
    #:*interaction-log-record-content*
