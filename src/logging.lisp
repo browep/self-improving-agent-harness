@@ -138,7 +138,12 @@ fresh timestamp is generated for the filename only."
 SESSION-ID, when supplied, becomes *INTERACTION-SESSION-ID* for stderr/event
 correlation. The durable log basename is that value when it is already an
 ISO-8601 UTC timestamp; otherwise a fresh timestamp is generated for the
-filename only. Parent-record linkage is reset for the new session file."
+filename only. Parent-record linkage is reset for the new session file.
+
+If DIRECTORY cannot be created or written (e.g. a read-only /workspace mount
+under bin/test), durable logging is disabled with a stderr warning rather than
+signaling: an unwritable log path must not abort an interactive chat. Returns
+the log path on success, or NIL when logging is disabled or unavailable."
   (setf *interaction-log-directory* nil
         *interaction-log-path* nil
         *interaction-log-file-id* nil
@@ -146,20 +151,31 @@ filename only. Parent-record linkage is reset for the new session file."
   (when session-id
     (setf *interaction-session-id* session-id))
   (if directory
-      (let* ((dir (uiop:ensure-directory-pathname directory))
-             (file-id (ensure-session-file-id (or session-id *interaction-session-id*)))
-             (path (merge-pathnames (session-jsonl-filename file-id) dir)))
-        (ensure-directories-exist path)
-        (with-open-file (stream path :direction :output :if-does-not-exist :create
-                                :if-exists :append :external-format :utf-8)
-          (finish-output stream))
-        ;; If the caller did not supply a correlation id, use the file timestamp.
-        (unless *interaction-session-id*
-          (setf *interaction-session-id* file-id))
-        (setf *interaction-log-file-id* file-id
-              *interaction-log-directory* dir
-              *interaction-log-path* path)
-        path)
+      (handler-case
+          (let* ((dir (uiop:ensure-directory-pathname directory))
+                 (file-id (ensure-session-file-id (or session-id *interaction-session-id*)))
+                 (path (merge-pathnames (session-jsonl-filename file-id) dir)))
+            (ensure-directories-exist path)
+            (with-open-file (stream path :direction :output :if-does-not-exist :create
+                                    :if-exists :append :external-format :utf-8)
+              (finish-output stream))
+            ;; If the caller did not supply a correlation id, use the file timestamp.
+            (unless *interaction-session-id*
+              (setf *interaction-session-id* file-id))
+            (setf *interaction-log-file-id* file-id
+                  *interaction-log-directory* dir
+                  *interaction-log-path* path)
+            path)
+        (error (condition)
+          (setf *interaction-log-directory* nil
+                *interaction-log-path* nil
+                *interaction-log-file-id* nil)
+          (ignore-errors
+            (format *error-output*
+                    "~&WARNING durable interaction logging disabled: cannot write ~A (~A)~%"
+                    directory condition)
+            (finish-output *error-output*))
+          nil))
       nil))
 
 (defun safe-interaction-label-p (value)
@@ -171,17 +187,30 @@ filename only. Parent-record linkage is reset for the new session file."
               value)))
 
 (defun scrub-interaction-log-text (text)
-  "Return TEXT with common secret patterns redacted for durable logs."
+  "Return TEXT with common secret patterns redacted for durable logs.
+
+INVARIANT: every replacement helper here MUST advance past the text it inserts.
+A naive search-from-0 replace whose REPLACEMENT contains its own PATTERN loops
+forever, growing the string until the heap exhausts (this scrubbing runs on tool
+output, so `cat`-ing a source file that mentions OPENROUTER_API_KEY= once hung
+the whole chat). RUN-SCRUB-TERMINATION-REGRESSION in tests/logging.lisp guards it."
   (let ((out (if (stringp text) text (princ-to-string text))))
     (labels ((replace-all (string pattern replacement)
-               (loop for start = (search pattern string :test #'char-equal)
-                     while start
-                     do (setf string
-                              (concatenate 'string
-                                           (subseq string 0 start)
-                                           replacement
-                                           (subseq string (+ start (length pattern)))))
-                     finally (return string))))
+               ;; Advance past each replacement instead of re-searching from 0.
+               ;; The old version searched from the start every iteration, so a
+               ;; REPLACEMENT that itself contains PATTERN (e.g. replacing
+               ;; "OPENROUTER_API_KEY=" with "OPENROUTER_API_KEY=***") matched
+               ;; forever, growing STRING without bound until the heap exhausted.
+               (let ((out (make-string-output-stream))
+                     (start 0)
+                     (pattern-length (length pattern)))
+                 (loop for pos = (search pattern string :start2 start :test #'char-equal)
+                       while pos
+                       do (write-string string out :start start :end pos)
+                          (write-string replacement out)
+                          (setf start (+ pos pattern-length))
+                       finally (write-string string out :start start))
+                 (get-output-stream-string out))))
       ;; Cheap, conservative redactions for tokens often pasted into prompts.
       (setf out (replace-all out "OPENROUTER_API_KEY=" "OPENROUTER_API_KEY=***"))
       (let ((markers '("sk-" "sk-or-")))

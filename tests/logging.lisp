@@ -11,7 +11,31 @@
      (string= "jsonl" (string-downcase (or (pathname-type path) ""))))
    (uiop:directory-files directory)))
 
+(defun run-scrub-termination-regression ()
+  "Fail (bounded) if SCRUB-INTERACTION-LOG-TEXT ever loops forever again.
+
+Historically REPLACE-ALL re-searched from index 0, so replacing
+\"OPENROUTER_API_KEY=\" with \"OPENROUTER_API_KEY=***\" matched endlessly and grew
+the string until the heap exhausted -- hanging any chat that logged tool output
+mentioning the key. The WITH-TIMEOUT converts a regression into a clean, fast
+failure instead of another silent hang."
+  (handler-case
+      (sb-ext:with-timeout 10
+        (let ((result (self-improving-agent-harness::scrub-interaction-log-text
+                       "OPENROUTER_API_KEY=sk-live-secret and again OPENROUTER_API_KEY= here")))
+          (ensure-true (search "OPENROUTER_API_KEY=***" result)
+                       "scrub redacts the OPENROUTER_API_KEY= marker")
+          (ensure-true (not (search "sk-live-secret" result))
+                       "scrub redacts sk- token bodies")
+          (ensure-true (< (length result) 200)
+                       "scrub does not grow the string without bound")))
+    (sb-ext:timeout ()
+      (error "Test failed: scrub-interaction-log-text did not terminate (infinite-loop regression).")))
+  (format t "Scrub termination regression passed.~%")
+  t)
+
 (defun run-logging-tests ()
+  (run-scrub-termination-regression)
   (let* ((directory #P"/tmp/self-improving-agent-harness-logging-test/")
          (session-id "2026-01-01T00:00:00.001Z")
          (path (logging-test-session-path directory session-id)))

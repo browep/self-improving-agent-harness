@@ -241,8 +241,42 @@ struct/class layout changes."
       (when (chat-session-failed-turn-p session)
         (uiop:quit 1)))))
 
+(defparameter +chat-fatal-exit-code+ 70
+  "Process exit code used when an unhandled condition aborts the chat process.")
+
+(defun chat-fatal-debugger-hook (condition previous-hook)
+  "Print CONDITION plus a short backtrace and exit instead of entering the debugger.
+
+bin/chat runs SBCL with an attached stdin (interactive or supervisor pipe) and,
+unlike every other wrapper, cannot pass --non-interactive. Without this hook an
+unhandled condition -- notably SB-KERNEL::HEAP-EXHAUSTED-ERROR -- drops into the
+interactive debugger, which then blocks reading stdin and looks like a hang.
+Each step is wrapped in IGNORE-ERRORS because a heap-exhausted image may fail to
+allocate while reporting; the process must still exit."
+  (declare (ignore previous-hook))
+  (ignore-errors
+    (format *error-output* "~&FATAL name=chat condition=~A message=~A~%"
+            (type-of condition) condition)
+    (finish-output *error-output*))
+  (ignore-errors
+    (log-interaction :error "session-failed"
+                     :message (princ-to-string condition)))
+  (ignore-errors
+    (sb-debug:print-backtrace :stream *error-output* :count 20)
+    (finish-output *error-output*))
+  (uiop:quit +chat-fatal-exit-code+))
+
+(defun install-chat-fatal-debugger-hook ()
+  "Route unhandled conditions to CHAT-FATAL-DEBUGGER-HOOK for this process.
+
+Does not affect normal interactive reads; it only replaces what happens when a
+condition would otherwise enter the debugger."
+  (setf sb-ext:*invoke-debugger-hook* #'chat-fatal-debugger-hook)
+  (values))
+
 (defun run-chat-cli ()
   "Entry point for bin/chat after the system is loaded. Reads HARNESS_* env vars."
+  (install-chat-fatal-debugger-hook)
   (let* ((mode (required-environment "HARNESS_CHAT_MODE"))
          (model (required-environment "HARNESS_CHAT_MODEL"))
          (max-rounds (parse-integer (required-environment "HARNESS_CHAT_MAX_ROUNDS")))

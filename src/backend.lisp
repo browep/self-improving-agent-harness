@@ -164,6 +164,30 @@ session. Captured function objects stay frozen until the session is rebuilt."
   "Look up NAME in HANDLERS and coerce it to a callable designator."
   (coerce-tool-handler (cdr (assoc name handlers :test #'string=)) name))
 
+(defparameter *tool-result-content-limit* 16000
+  "Maximum characters of a single tool result retained in chat history and sent
+back to the model. NIL disables truncation.
+
+Chat history keeps every tool result and re-sends the whole transcript each
+round, so an unbounded result (e.g. `cat` of a large file) is re-serialized on
+every subsequent round and drives the process toward heap exhaustion. Capping
+the result here bounds both live history size and per-round allocation. Bound or
+set at runtime (reload_harness picks it up) to tune the cap.")
+
+(defun truncate-tool-result-content (content)
+  "Return CONTENT capped to *TOOL-RESULT-CONTENT-LIMIT* with a clear marker.
+
+Only string results are truncated; the marker records the original length so the
+model can narrow the command and re-run it rather than silently losing data."
+  (if (and (stringp content)
+           (integerp *tool-result-content-limit*)
+           (plusp *tool-result-content-limit*)
+           (> (length content) *tool-result-content-limit*))
+      (let ((limit *tool-result-content-limit*))
+        (format nil "~A~%...[tool output truncated to ~D of ~D characters; re-run a narrower command for more]"
+                (subseq content 0 limit) limit (length content)))
+      content))
+
 (defun openrouter-tool-result-content (result)
   (if (stringp result)
       result
@@ -204,7 +228,8 @@ session. Captured function objects stay frozen until the session is rebuilt."
                  (funcall handler arguments)
                (error ()
                  (format nil "TOOL_ERROR: Tool ~A failed." name))))
-           (content (openrouter-tool-result-content result)))
+           (content (truncate-tool-result-content
+                     (openrouter-tool-result-content result))))
       (log-interaction :info "tool-completed"
                        :tool (or name "unknown")
                        :arguments arg-text

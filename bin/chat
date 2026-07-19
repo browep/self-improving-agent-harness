@@ -109,6 +109,17 @@ if [ "$fake_backend" = false ] && [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$r
   exit 2
 fi
 
+# SBCL's default dynamic space is 1 GiB. A long chat retains every tool result in
+# history and re-serializes the whole transcript each round, so the default heap
+# can exhaust mid-session -- and because bin/chat cannot pass --non-interactive,
+# exhaustion drops into the debugger and blocks on stdin (a silent hang). Give
+# the process real headroom; override with HARNESS_CHAT_DYNAMIC_SPACE_MB.
+dynamic_space_mb=${HARNESS_CHAT_DYNAMIC_SPACE_MB:-4096}
+case "$dynamic_space_mb" in
+  ''|*[!0-9]*) printf '%s\n' 'bin/chat: HARNESS_CHAT_DYNAMIC_SPACE_MB must be a positive integer (MiB)' >&2; exit 2 ;;
+esac
+[ "$dynamic_space_mb" -gt 0 ] || { printf '%s\n' 'bin/chat: HARNESS_CHAT_DYNAMIC_SPACE_MB must be positive' >&2; exit 2; }
+
 export HARNESS_CHAT_MODE=$mode
 export HARNESS_CHAT_MODEL=$model
 export HARNESS_CHAT_MAX_ROUNDS=$max_rounds
@@ -135,6 +146,7 @@ if [ "$mode" = interactive ]; then
     --env HARNESS_CHAT_SESSION_ID \
     --env HARNESS_CHAT_STREAM_MODE \
     --env HARNESS_CHAT_FAKE_BACKEND \
+    --dynamic-space-size "$dynamic_space_mb" \
     --noinform \
     --load scripts/chat.lisp
 fi
@@ -146,5 +158,6 @@ exec "$container_runner" --writable-workspace \
   --env HARNESS_CHAT_MAX_ROUNDS \
   --env HARNESS_CHAT_SESSION_ID \
   --env HARNESS_CHAT_FAKE_BACKEND \
+  --dynamic-space-size "$dynamic_space_mb" \
   --noinform \
   --load scripts/chat.lisp

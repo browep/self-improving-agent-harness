@@ -12,6 +12,8 @@
    #:*interaction-log-record-content*
    #:*interaction-log-content-limit*
    #:run-shell-tool
+   #:*tool-result-content-limit*
+   #:truncate-tool-result-content
    #:*run-shell-after-hooks*
    #:*run-shell-default-timeout-seconds*
    #:*run-shell-timeout-kill-after-seconds*
