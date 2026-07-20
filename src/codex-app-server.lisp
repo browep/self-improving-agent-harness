@@ -21,8 +21,12 @@ runtime (reload_harness picks up new values) so a pinned binary path can be
 substituted without a rebuild. Never contains credentials.")
 
 (defparameter *codex-request-timeout-seconds* 60
-  "Wall-clock seconds to wait for a single JSON-RPC response before signalling.
-NIL disables the per-request timeout. Login waits use their own bound.")
+  "Wall-clock seconds to wait for a single framed JSON-RPC message from the
+app-server before signalling a CODEX-APP-SERVER-ERROR. Enforced in CODEX-RECEIVE
+so a hung or protocol-mismatched app-server never blocks the harness forever
+(a real hang seen when the live app-server did not speak the expected framing).
+NIL disables the per-read timeout; bound at runtime to tune, reload_harness
+picks up new values.")
 
 (define-condition codex-app-server-error (error)
   ((reason :initarg :reason :reader codex-app-server-error-reason))
@@ -70,9 +74,31 @@ a fake server. PROCESS is optional and only set for spawned children."
     (write-string (codex-encode-jsonrpc-message object) output)
     (finish-output output)))
 
+(defun call-with-codex-timeout (timeout-seconds thunk)
+  "Run THUNK, aborting with a CODEX-APP-SERVER-ERROR after TIMEOUT-SECONDS.
+
+A NIL or non-positive timeout runs THUNK with no bound. The timeout guards the
+single blocking point (reading a framed message) so a hung or mismatched
+app-server surfaces a diagnosable error instead of hanging the process."
+  (cond
+    ((and (realp timeout-seconds) (plusp timeout-seconds))
+     (handler-case
+         (sb-ext:with-timeout timeout-seconds
+           (funcall thunk))
+       (sb-ext:timeout ()
+         (codex-error "timed out after ~A seconds waiting for an app-server message; the app-server may not speak the expected stdio JSON-RPC framing."
+                      timeout-seconds))))
+    (t (funcall thunk))))
+
 (defun codex-receive (connection)
-  "Read one framed JSON-RPC message from CONNECTION, or :EOF at end of stream."
-  (codex-read-jsonrpc-message (codex-connection-input connection)))
+  "Read one framed JSON-RPC message from CONNECTION, or :EOF at end of stream.
+
+The blocking read is bounded by *CODEX-REQUEST-TIMEOUT-SECONDS* so a
+non-responsive or protocol-mismatched app-server cannot hang the harness."
+  (call-with-codex-timeout *codex-request-timeout-seconds*
+                           (lambda ()
+                             (codex-read-jsonrpc-message
+                              (codex-connection-input connection)))))
 
 (defun codex-jsonrpc-error-field (message)
   "Return the JSON-RPC error object from a decoded response MESSAGE, or NIL."

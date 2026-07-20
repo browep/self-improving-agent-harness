@@ -17,13 +17,15 @@
   "Build a JSON-RPC 2.0 request object as a yason-ready hash table.
 
 ID is a request identifier (integer or string). METHOD is the RPC method name.
-PARAMS, when supplied, is a hash table or alist/plist already in JSON shape."
+PARAMS is a hash table or alist/plist already in JSON shape. The Codex
+app-server requires a `params` field even for argument-less methods (it rejects
+a missing field with -32600 \"missing field `params`\"), so PARAMS defaults to
+an empty JSON object rather than being omitted."
   (let ((object (make-hash-table :test #'equal)))
     (setf (gethash "jsonrpc" object) "2.0"
           (gethash "id" object) id
-          (gethash "method" object) method)
-    (when params
-      (setf (gethash "params" object) params))
+          (gethash "method" object) method
+          (gethash "params" object) (or params (make-hash-table :test #'equal)))
     object))
 
 (defun codex-jsonrpc-notification-p (message)
@@ -38,69 +40,38 @@ PARAMS, when supplied, is a hash table or alist/plist already in JSON shape."
     (gethash name message)))
 
 ;;; ---------------------------------------------------------------------------
-;;; Content-Length framing (the framing Codex/LSP-style app-servers use).
+;;; Line-delimited JSON framing.
+;;;
+;;; The official `codex app-server` speaks newline-delimited JSON over stdio:
+;;; one compact JSON object per line, terminated by a newline. (Validated
+;;; against @openai/codex 0.144.6, which rejects LSP-style Content-Length
+;;; frames with "Failed to deserialize JSONRPCMessage".) Each JSON object must
+;;; therefore contain no raw newline; YASON emits compact single-line JSON and
+;;; escapes control characters in strings, so this holds.
 ;;; ---------------------------------------------------------------------------
 
 (defun codex-encode-jsonrpc-message (object)
-  "Serialize OBJECT to a Content-Length-framed JSON-RPC message string.
-
-The body is UTF-8 JSON; the header reports the body's UTF-8 byte length, per the
-LSP-style framing Codex app-server uses over stdio."
-  (let* ((body (with-output-to-string (stream) (yason:encode object stream)))
-         (byte-length (length (sb-ext:string-to-octets body :external-format :utf-8))))
-    (format nil "Content-Length: ~D~C~C~C~C~A"
-            byte-length #\Return #\Newline #\Return #\Newline body)))
-
-(defun codex-read-jsonrpc-headers (stream)
-  "Read framing headers from STREAM until the blank separator line.
-
-Returns an alist of (lowercased-name . value), or NIL at end of stream before
-any header. Header lines are CRLF-terminated; a bare LF is tolerated."
-  (let ((headers '())
-        (saw-any nil))
-    (loop
-      (let ((line (read-line stream nil :eof)))
-        (when (eq line :eof)
-          (return (and saw-any (nreverse headers))))
-        (setf line (string-right-trim '(#\Return) line))
-        (when (zerop (length line))
-          (return (nreverse headers)))
-        (setf saw-any t)
-        (let ((colon (position #\: line)))
-          (when colon
-            (push (cons (string-downcase (string-trim " " (subseq line 0 colon)))
-                        (string-trim " " (subseq line (1+ colon))))
-                  headers)))))))
-
-(defun codex-header-value (headers name)
-  (cdr (assoc (string-downcase name) headers :test #'string=)))
+  "Serialize OBJECT to a single newline-terminated JSON line for the app-server."
+  (let ((body (with-output-to-string (stream) (yason:encode object stream))))
+    (concatenate 'string body (string #\Newline))))
 
 (defun codex-read-jsonrpc-message (stream)
-  "Read one Content-Length-framed JSON-RPC message from STREAM.
+  "Read one newline-delimited JSON-RPC message from STREAM.
 
 Returns the decoded message (a yason hash table) or :EOF at clean end of stream.
-Signals an error on a malformed frame (missing/invalid Content-Length)."
-  (let ((headers (codex-read-jsonrpc-headers stream)))
-    (when (null headers)
-      (return-from codex-read-jsonrpc-message :eof))
-    (let ((length-header (codex-header-value headers "content-length")))
-      (unless length-header
-        (error "Codex JSON-RPC frame is missing a Content-Length header."))
-      (let ((byte-length (ignore-errors (parse-integer length-header))))
-        (unless (and (integerp byte-length) (>= byte-length 0))
-          (error "Codex JSON-RPC frame has an invalid Content-Length ~S." length-header))
-        (let ((body (make-string byte-length)))
-          ;; The body length is a BYTE count; for ASCII JSON (the common case for
-          ;; these control messages) this matches the character count. Read that
-          ;; many characters, then decode.
-          (let ((read (read-sequence body stream)))
-            (when (< read byte-length)
-              (error "Codex JSON-RPC frame body truncated: expected ~D, got ~D."
-                     byte-length read)))
+Blank lines are skipped. Signals an error on a non-empty line that is not valid
+JSON."
+  (loop
+    (let ((line (read-line stream nil :eof)))
+      (when (eq line :eof)
+        (return :eof))
+      (setf line (string-right-trim '(#\Return) line))
+      (unless (zerop (length (string-trim " " line)))
+        (return
           (handler-case
-              (yason:parse body)
+              (yason:parse line)
             (error (condition)
-              (error "Codex JSON-RPC frame body is not valid JSON: ~A" condition))))))))
+              (error "Codex JSON-RPC line is not valid JSON: ~A" condition))))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Recursive auth redaction.

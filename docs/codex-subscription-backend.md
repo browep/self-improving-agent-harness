@@ -117,3 +117,28 @@ subscription-billed live turn (`bin/verify-codex-chatgpt-auth` after a real
 ChatGPT login), and confirmation that a read-only tool-free turn is accepted by
 a live subscription session. The deterministic tests exercise these code paths
 against a fake server shaped to the pinned schema, not a live account.
+
+## Live app-server findings (validated by running @openai/codex 0.144.6)
+
+Running the real `codex app-server` (installed in the image) surfaced two facts
+that earlier assumptions got wrong, both now corrected and the cause of a
+`verify-codex-chatgpt-auth` hang:
+
+1. **Framing is newline-delimited JSON, not LSP Content-Length.** The app-server
+   emits/accepts one compact JSON object per line over stdio; a Content-Length
+   frame is rejected with "Failed to deserialize JSONRPCMessage", after which our
+   reader blocked forever. `codex-encode/read-jsonrpc-message` now use
+   newline-delimited framing.
+2. **`params` is required even for argument-less methods.** `account/read` with
+   no `params` field is rejected with `-32600 missing field \`params\``.
+   `codex-jsonrpc-request` now always includes `params` (empty object default).
+
+A per-read timeout (`*codex-request-timeout-seconds*`, default 60s) additionally
+bounds the single blocking read so any future protocol mismatch surfaces a
+diagnosable `CODEX-APP-SERVER-ERROR` instead of hanging.
+
+End-to-end against the live app-server (not logged in), `verify-codex-chatgpt-auth`
+now completes in seconds and fails cleanly with
+`no Codex ChatGPT session; run the managed login first (authMode is unset)` --
+no hang, no timeout, no OPENAI_API_KEY fallback. A real ChatGPT login is still
+required to prove the authenticated turn (acceptance criterion #1).

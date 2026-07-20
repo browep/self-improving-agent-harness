@@ -12,8 +12,10 @@
                    (setf (gethash "type" p) "chatgpt") p))
          (request (self-improving-agent-harness:codex-jsonrpc-request 7 "account/login/start" params))
          (framed (self-improving-agent-harness:codex-encode-jsonrpc-message request)))
-    (ensure-true (search "Content-Length: " framed)
-                 "framed message carries a Content-Length header")
+    (ensure-true (eql #\Newline (char framed (1- (length framed))))
+                 "framed message is newline-terminated")
+    (ensure-true (not (find #\Newline framed :end (1- (length framed))))
+                 "framed message is a single line (no embedded newline)")
     (with-input-from-string (in framed)
       (let ((decoded (self-improving-agent-harness:codex-read-jsonrpc-message in)))
         (ensure-true (hash-table-p decoded) "decoded frame is a JSON object")
@@ -23,9 +25,19 @@
                      "decoded frame preserves the request id")
         (ensure-true (equal "account/login/start" (codex-jsonrpc-field* decoded "method"))
                      "decoded frame preserves the method")
+        (ensure-true (nth-value 1 (gethash "params" decoded))
+                     "request always carries a params field (app-server rejects a missing one)")
         ;; Next read on an exhausted stream is a clean EOF.
         (ensure-true (eq :eof (self-improving-agent-harness:codex-read-jsonrpc-message in))
                      "reading past the last frame returns :eof"))))
+  ;; An argument-less request still includes an (empty) params object, because
+  ;; the Codex app-server rejects a missing params field with -32600.
+  (let* ((req (self-improving-agent-harness:codex-jsonrpc-request 3 "account/read"))
+         (framed (self-improving-agent-harness:codex-encode-jsonrpc-message req)))
+    (with-input-from-string (in framed)
+      (let ((decoded (self-improving-agent-harness:codex-read-jsonrpc-message in)))
+        (ensure-true (hash-table-p (codex-jsonrpc-field* decoded "params"))
+                     "an argument-less request serializes params as an empty object"))))
   ;; Notification detection: a method call without an id.
   (let ((note (make-hash-table :test #'equal)))
     (setf (gethash "jsonrpc" note) "2.0"
@@ -37,11 +49,16 @@
           (gethash "id" resp) 1)
     (ensure-true (not (self-improving-agent-harness:codex-jsonrpc-notification-p resp))
                  "a message with an id is not a notification"))
-  ;; Malformed frame: missing Content-Length signals rather than hangs.
-  (with-input-from-string (in (format nil "X-Bogus: 1~C~C~C~C{}" #\Return #\Newline #\Return #\Newline))
+  ;; A non-empty line that is not valid JSON signals rather than hangs.
+  (with-input-from-string (in (format nil "this is not json~%"))
     (ensure-true (nth-value 1 (ignore-errors
                                 (self-improving-agent-harness:codex-read-jsonrpc-message in)))
-                 "a frame with no Content-Length signals an error")))
+                 "a non-JSON line signals an error"))
+  ;; Blank lines are skipped; a following JSON line is still read.
+  (with-input-from-string (in (format nil "~%   ~%{\"jsonrpc\":\"2.0\",\"id\":9}~%"))
+    (let ((decoded (self-improving-agent-harness:codex-read-jsonrpc-message in)))
+      (ensure-true (eql 9 (codex-jsonrpc-field* decoded "id"))
+                   "blank lines are skipped before a JSON line"))))
 
 (defun codex-redact-account-payload ()
   "A decoded-account-shaped hash table mixing secret and non-secret fields."
