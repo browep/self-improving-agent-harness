@@ -53,6 +53,13 @@ provider-neutral controls such as temperature or maximum output tokens."
 API keys are supplied at runtime, typically from OPENROUTER_API_KEY, never
 committed to the repository."))
 
+(defclass synthetic-backend (openrouter-backend) ()
+  (:documentation "Synthetic's OpenAI-compatible Chat Completions backend.
+
+This deliberately reuses the proven OpenAI-compatible serialization and
+tool-call protocol while retaining a distinct provider identity, base URL, and
+SYNTHETIC_API_KEY credential boundary."))
+
 (defun make-openrouter-backend (&key api-key
                                   (base-url "https://openrouter.ai/api/v1"))
   "Construct an OpenRouter backend configuration without performing I/O."
@@ -60,6 +67,22 @@ committed to the repository."))
                  :name "openrouter"
                  :api-key api-key
                  :base-url base-url))
+
+(defun make-synthetic-backend (&key api-key
+                                 (base-url "https://api.synthetic.new/openai/v1"))
+  "Construct a Synthetic OpenAI-compatible backend without performing I/O."
+  (make-instance 'synthetic-backend
+                 :name "synthetic"
+                 :api-key api-key
+                 :base-url base-url))
+
+(defun synthetic-backend-base-url (backend)
+  "Return BACKEND's configured Synthetic OpenAI-compatible base URL."
+  (openrouter-backend-base-url backend))
+
+(defun synthetic-backend-api-key (backend)
+  "Return BACKEND's runtime Synthetic API key. Never log this value."
+  (openrouter-backend-api-key backend))
 
 (defun openrouter-request-payload (request)
   "Return REQUEST as a provider payload before JSON serialization.
@@ -117,6 +140,10 @@ trips as the intended escape rather than an invalid raw byte."
     (yason:encode (openrouter-json-value (openrouter-request-payload request))
                   stream)))
 
+(defun synthetic-request-json (request)
+  "Serialize REQUEST to Synthetic's OpenAI-compatible JSON contract."
+  (openrouter-request-json request))
+
 (defun openrouter-request-octets (request)
   "Encode REQUEST JSON as UTF-8 bytes for Drakma's HTTP transport."
   (sb-ext:string-to-octets (openrouter-request-json request)
@@ -167,6 +194,10 @@ trips as the intended escape rather than an invalid raw byte."
 (defun openrouter-completions-url (backend)
   (format nil "~A/chat/completions"
           (string-right-trim "/" (openrouter-backend-base-url backend))))
+
+(defun synthetic-completions-url (backend)
+  "Return Synthetic's Chat Completions endpoint for BACKEND."
+  (openrouter-completions-url backend))
 
 (defun openrouter-response-body-string (body)
   "Convert Drakma's text or octet response body to UTF-8 JSON text."
@@ -359,6 +390,15 @@ NIL disables the overall timeout. Connection establishment still uses
 *OPENROUTER-CONNECTION-TIMEOUT-SECONDS*. Bound or set at runtime to tune hang
 diagnosis without rebuilding the image.")
 
+(defparameter *openai-compatible-provider-label* "OpenRouter"
+  "Provider label for dynamic OpenAI-compatible transport diagnostics.
+
+OPENROUTER-BACKEND keeps the default. SYNTHETIC-BACKEND dynamically binds this
+to Synthetic around the inherited, protocol-identical transport method.")
+
+(defparameter *openai-compatible-key-environment-variable* "OPENROUTER_API_KEY"
+  "Credential name used only in safe missing-credential diagnostics.")
+
 (defparameter *openrouter-connection-timeout-seconds* 30
   "Seconds to wait while establishing the OpenRouter TCP connection.
 
@@ -531,13 +571,13 @@ userinfo and any `?query`/`#fragment` are stripped so no credentials leak."
         (concatenate 'string (subseq trimmed 0 (- limit 3)) "..."))))
 
 (defun openrouter-http-error-message (status-code body-text)
-  "Build a concise OpenRouter HTTP error string including a body snippet."
+  "Build a concise OpenAI-compatible HTTP error string including a body snippet."
   (let* ((snippet (truncate-provider-error-body body-text))
          (suffix (if (plusp (length snippet))
                      (format nil " body=~S" snippet)
                      "")))
-    (format nil "OpenRouter request failed with HTTP status ~D.~A"
-            status-code suffix)))
+    (format nil "~A request failed with HTTP status ~D.~A"
+            *openai-compatible-provider-label* status-code suffix)))
 
 (defun call-with-openrouter-timeout (timeout-seconds thunk)
   "Run THUNK, optionally aborting after TIMEOUT-SECONDS wall-clock seconds.
@@ -550,8 +590,8 @@ turns can log turn-failed with a diagnosable reason."
          (sb-ext:with-timeout timeout-seconds
            (funcall thunk))
        (sb-ext:timeout ()
-         (error "OpenRouter request timed out after ~A seconds."
-                timeout-seconds))))
+         (error "~A request timed out after ~A seconds."
+                *openai-compatible-provider-label* timeout-seconds))))
     (t (funcall thunk))))
 
 (defun openrouter-error-phase (condition body-received-p)
@@ -594,7 +634,9 @@ with PHASE and ERROR-CLASS before the condition is re-signaled.
 Successful responses are returned as COMPLETION-RESPONSE values."
   (let ((api-key (openrouter-backend-api-key backend)))
     (unless (and (stringp api-key) (plusp (length api-key)))
-      (error "OPENROUTER_API_KEY is required for OpenRouter requests."))
+      (error "~A is required for ~A requests."
+             *openai-compatible-key-environment-variable*
+             *openai-compatible-provider-label*))
     (let* ((url (openrouter-completions-url backend))
            (log-url (openrouter-log-url url))
            (log-url-path (openrouter-log-url-path url))
@@ -711,3 +753,12 @@ Successful responses are returned as COMPLETION-RESPONSE values."
                                attempt-id phase error-class duration
                                (truncate-provider-error-body text))))
             (error condition)))))))
+
+            (defmethod complete ((backend synthetic-backend) request)
+            "POST REQUEST to Synthetic through the inherited OpenAI-compatible transport.
+
+            The dynamic labels preserve provider-specific, non-secret diagnostics while
+            keeping the request/tool-call serialization shared with OpenRouter."
+            (let ((*openai-compatible-provider-label* "Synthetic")
+            (*openai-compatible-key-environment-variable* "SYNTHETIC_API_KEY"))
+            (call-next-method)))

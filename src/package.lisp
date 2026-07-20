@@ -107,6 +107,10 @@
    #:make-openrouter-backend
    #:openrouter-backend-base-url
    #:openrouter-backend-api-key
+   #:synthetic-backend
+   #:make-synthetic-backend
+   #:synthetic-backend-base-url
+   #:synthetic-backend-api-key
    #:select-chat-backend
    #:backend-api-key-configured-p
    #:run-harness

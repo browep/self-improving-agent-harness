@@ -12,10 +12,12 @@ OpenAI Platform API-key billing is rejected. No OPENAI_API_KEY path exists."
            (with-restored-env (thunk)
              (let ((saved-backend (env "HARNESS_BACKEND"))
                    (saved-or (env "OPENROUTER_API_KEY"))
+                   (saved-synthetic (env "SYNTHETIC_API_KEY"))
                    (saved-oa (env "OPENAI_API_KEY")))
                (unwind-protect (funcall thunk)
                  (set-env "HARNESS_BACKEND" saved-backend)
                  (set-env "OPENROUTER_API_KEY" saved-or)
+                 (set-env "SYNTHETIC_API_KEY" saved-synthetic)
                  (set-env "OPENAI_API_KEY" saved-oa)))))
     (with-restored-env
      (lambda ()
@@ -34,6 +36,19 @@ OpenAI Platform API-key billing is rejected. No OPENAI_API_KEY path exists."
        (let ((b (select-chat-backend)))
          (ensure-true (typep b 'self-improving-agent-harness:openrouter-backend)
                       "explicit openrouter selects openrouter"))
+
+       (set-env "HARNESS_BACKEND" "synthetic")
+       (set-env "SYNTHETIC_API_KEY" "synthetic-from-env")
+       (let ((b (select-chat-backend)))
+         (ensure-true (typep b 'self-improving-agent-harness::synthetic-backend)
+                      "HARNESS_BACKEND=synthetic selects the Synthetic backend")
+         (ensure-equal "synthetic" (backend-name b)
+                       "Synthetic backend has a stable provider identity")
+         (ensure-equal "synthetic-from-env"
+                       (self-improving-agent-harness::synthetic-backend-api-key b)
+                       "Synthetic selector reads SYNTHETIC_API_KEY")
+         (ensure-true (backend-api-key-configured-p b)
+                      "Synthetic with key reports api-key-configured"))
 
        (set-env "HARNESS_BACKEND" "codex")
        (let ((b (select-chat-backend)))
@@ -90,5 +105,5 @@ OpenAI Platform API-key billing is rejected. No OPENAI_API_KEY path exists."
          (ensure-true (not (getf summary :api-key-present))
                       "run-harness does not claim an API key for codex")))))
 
-  (format t "Backend selection (openrouter|codex; no OpenAI Platform) tests passed.~%")
+  (format t "Backend selection (openrouter|synthetic|codex; no OpenAI Platform) tests passed.~%")
   t)

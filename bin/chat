@@ -23,6 +23,7 @@ also pass --model/--max-rounds. Errors (no snapshot) fall back to a fresh sessio
 
 --backend selects the provider adapter (CLI; preferred over env):
   openrouter  (default) OpenRouter Chat Completions via OPENROUTER_API_KEY
+  synthetic             Synthetic OpenAI-compatible Chat Completions via SYNTHETIC_API_KEY
   codex       ChatGPT/Codex *subscription* via local codex app-server (no API key)
 
 OpenAI Platform API-key billing (OPENAI_API_KEY / api.openai.com) is not available.
@@ -48,7 +49,8 @@ deterministic no-provider backend for offline integration tests only.
 Defaults:
   --backend     openrouter
   --model       openai/gpt-4.1-mini (exact OpenRouter model ID; for codex use a
-                Codex/subscription model id such as gpt-5-codex)
+                Codex/subscription model id such as gpt-5-codex; for Synthetic,
+                prefer an exact model ID over a rotating syn: alias)
   --max-rounds  60
   --session-id  an ISO-8601 UTC timestamp session id (generated when omitted)
 
@@ -58,10 +60,10 @@ workspace checkout. Non-timestamp values still work for stderr correlation, but
 the log file basename is always an ISO timestamp. Without --session-id, bin/chat
 generates a fresh UTC timestamp; it is not a credential and not a resume token.
 
-For --backend openrouter, pass the Models API's `id` field to --model, not a
-display name. Browse https://openrouter.ai/models or query
-https://openrouter.ai/api/v1/models; this chat supplies run_shell and
-reload_harness, so choose a model supporting the `tools` parameter.
+For --backend openrouter or synthetic, pass the Models API's `id` field to
+--model, not a display name. Synthetic `syn:` aliases intentionally rotate;
+pin a returned exact model ID for reproducible runs. This chat supplies
+run_shell and reload_harness, so choose a model supporting the `tools` parameter.
 
 One-shot failures are non-zero. Interactive failed turns are reported on stderr
 and the session continues with its previous history; a later normal exit is
@@ -136,13 +138,13 @@ fi
 # Normalize backend name (case-insensitive).
 backend_normalized=$(printf '%s' "$backend" | tr '[:upper:]' '[:lower:]')
 case "$backend_normalized" in
-  openrouter|codex) backend=$backend_normalized ;;
+  openrouter|synthetic|codex) backend=$backend_normalized ;;
   openai)
     printf '%s\n' 'bin/chat: --backend openai is not supported (no OPENAI_API_KEY / OpenAI Platform billing). Use --backend codex for ChatGPT/Codex subscription usage, or openrouter.' >&2
     exit 2
     ;;
   *)
-    printf '%s\n' "bin/chat: --backend must be openrouter or codex, got: $backend" >&2
+    printf '%s\n' "bin/chat: --backend must be openrouter, synthetic, or codex, got: $backend" >&2
     exit 2
     ;;
 esac
@@ -150,7 +152,7 @@ esac
 if [ "$codex_home_supplied" = true ]; then
   [ -n "$codex_home" ] || { printf '%s\n' 'bin/chat: --codex-home must not be empty' >&2; exit 2; }
 fi
-if [ "$backend" = openrouter ] && [ "$codex_home_supplied" = true ]; then
+if [ "$backend" != codex ] && [ "$codex_home_supplied" = true ]; then
   printf '%s\n' 'bin/chat: --codex-home is only valid with --backend codex' >&2
   exit 2
 fi
@@ -186,6 +188,11 @@ if [ "$fake_backend" = false ]; then
   if [ "$backend" = openrouter ]; then
     if [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$env_file" ]; then
       printf '%s\n' 'bin/chat: OPENROUTER_API_KEY must be exported or set in .env' >&2
+      exit 2
+    fi
+  elif [ "$backend" = synthetic ]; then
+    if [ -z "${SYNTHETIC_API_KEY:-}" ] && [ ! -f "$env_file" ]; then
+      printf '%s\n' 'bin/chat: SYNTHETIC_API_KEY must be exported or set in .env' >&2
       exit 2
     fi
   fi

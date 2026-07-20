@@ -1,6 +1,6 @@
 # Docker-first Common Lisp workflow. No host Lisp runtime is required.
 
-.PHONY: image test run experiment-example baseline report configuration-comparison source-mutation live-smoke live-tool-smoke live-chat-supervisor-tool-smoke verify-codex-chatgpt-auth chat repl clean
+.PHONY: image test run experiment-example baseline report configuration-comparison source-mutation live-smoke live-tool-smoke live-synthetic-smoke live-synthetic-tool-smoke live-chat-supervisor-tool-smoke verify-codex-chatgpt-auth chat repl clean
 
 image:
 	docker build --tag self-improving-agent-harness:dev .
@@ -31,6 +31,13 @@ live-smoke:
 
 live-tool-smoke:
 	./bin/live-tool-smoke
+
+# Opt-in paid Synthetic evidence; deliberately not a dependency of test.
+live-synthetic-smoke:
+	./bin/live-synthetic-smoke
+
+live-synthetic-tool-smoke:
+	./bin/live-synthetic-tool-smoke
 
 # Opt-in paid OpenRouter evidence; deliberately not a dependency of test.
 live-chat-supervisor-tool-smoke:
