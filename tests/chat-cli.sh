@@ -119,15 +119,29 @@ expect_success 'backend=codex' \
       HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file \
       "$repo_root/bin/chat" --backend codex --codex-home .codex-home --model gpt-5-codex --prompt 'no-or-key'
 
+# Synthetic is a distinct OpenAI-compatible API-key backend. It has no Codex
+# home and can run with SYNTHETIC_API_KEY when OpenRouter is absent.
+expect_success 'backend=synthetic' \
+  env -u OPENROUTER_API_KEY SYNTHETIC_API_KEY=synthetic-test-key HARNESS_CHAT_RUNNER="$runner" \
+      HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file \
+      "$repo_root/bin/chat" --backend SYNTHETIC --model hf:example/model --prompt 'synthetic path'
+expect_error 2 'SYNTHETIC_API_KEY must be exported' \
+  env -u OPENROUTER_API_KEY -u SYNTHETIC_API_KEY HARNESS_CHAT_RUNNER="$runner" \
+      HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file \
+      "$repo_root/bin/chat" --backend synthetic --prompt x
+
 expect_error 2 'not supported' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
       "$repo_root/bin/chat" --backend openai --prompt x
-expect_error 2 'must be openrouter or codex' \
+expect_error 2 'must be openrouter, synthetic, or codex' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
       "$repo_root/bin/chat" --backend nope --prompt x
 expect_error 2 'only valid with --backend codex' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
       "$repo_root/bin/chat" --codex-home .codex-home --prompt x
+expect_error 2 'only valid with --backend codex' \
+  env SYNTHETIC_API_KEY=synthetic-test-key HARNESS_CHAT_RUNNER="$runner" \
+      "$repo_root/bin/chat" --backend synthetic --codex-home .codex-home --prompt x
 expect_error 2 '--backend requires a value' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
       "$repo_root/bin/chat" --backend

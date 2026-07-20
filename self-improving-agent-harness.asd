@@ -28,6 +28,7 @@
                (:file "tests/codex-app-server")
                (:file "tests/codex-backend")
                (:file "tests/openrouter-adapter")
+               (:file "tests/synthetic-adapter")
                (:file "tests/tool-loop")
                (:file "tests/chat-session")
                (:file "tests/env-file")

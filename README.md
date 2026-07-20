@@ -1,13 +1,13 @@
 # Self-Improving Agent Harness
 
-A Common Lisp research harness for running, observing, judging, and iteratively improving agent workflows. The first provider adapter will target the OpenRouter API; the harness is designed so providers can be replaced without changing core orchestration.
+A Common Lisp research harness for running, observing, judging, and iteratively improving agent workflows. The harness includes OpenRouter and Synthetic OpenAI-compatible API adapters, while preserving a provider-neutral core so providers can be replaced without changing orchestration.
 
 > **Status:** design and exploration. The project starts with a small, dependency-free protocol and a portable Docker runtime rather than a committed agent architecture.
 
 ## Goals
 
 - Define a small, swappable backend protocol for model providers.
-- Implement an OpenRouter backend using API-key authentication.
+- Implement explicit, swappable API-key backends.
 - Run reproducible agent experiments with durable prompts, configuration, traces, outcomes, and costs.
 - Evaluate candidate changes against explicit tasks and acceptance criteria.
 - Support controlled improvement loops: propose, execute, judge, retain or reject.
@@ -22,17 +22,18 @@ A Common Lisp research harness for running, observing, judging, and iteratively 
 ## Architecture direction
 
 ```text
-experiment/task -> harness -> backend protocol -> OpenRouter (first adapter)
+experiment/task -> harness -> backend protocol -> OpenRouter / Synthetic
                       |              |
                       |              +-> future providers / local inference
                       +-> trace store, tool boundary, evaluator, improvement policy
 ```
 
 The core protocol is introduced in `src/backend.lisp`. It separates a request
-from the backend used to complete it. The first concrete adapter implements
-OpenRouter's non-streaming Chat Completions API with runtime API-key
-authentication. Persistence, tool execution, and the evaluation loop remain
-separate workstreams.
+from the backend used to complete it. OpenRouter and Synthetic share the
+non-streaming OpenAI-compatible Chat Completions and harness-owned tool-loop
+contract, but retain distinct provider identities, base URLs, credentials, and
+error/accounting evidence. Persistence, tool execution, and the evaluation loop
+remain separate workstreams.
 
 ## Experiment DSL and lineage
 
@@ -133,16 +134,16 @@ make repl
 
 The equivalent direct commands are `./bin/test`, `./bin/run`, and `./bin/container --noinform`. `bin/container` rebuilds the image before each invocation, mounts the repository at `/workspace:ro` by default, and keeps ASDF's cache in the `self-improving-agent-harness-cache` volume. `bin/chat` invokes it with `--writable-workspace`, mounting the repository at `/workspace` without the read-only flag.
 
-For a real OpenRouter request, place a key in an untracked `.env` file or
-explicitly export it before invoking the Docker-backed live smoke command:
+For real API-backed requests, place provider keys in an untracked `.env` file or
+explicitly export them before invoking Docker-backed live smoke commands:
 
 ```bash
 cp .env.example .env
-# Set OPENROUTER_API_KEY in .env; do not commit it.
+# Set OPENROUTER_API_KEY and/or SYNTHETIC_API_KEY in .env; do not commit them.
 ```
 
 The repo-root `.env` is bind-mounted at `/workspace/.env`. Beyond
-`OPENROUTER_API_KEY`, put any other runtime secrets there (for example
+`OPENROUTER_API_KEY` and `SYNTHETIC_API_KEY`, put any other runtime secrets there (for example
 `GITHUB_TOKEN` for `git`/`gh` inside `run_shell`), one `KEY=value` per line: at
 startup `bin/chat`'s Lisp process reads the file and sets each variable into its
 own process environment, which the agent's shell commands inherit. Values are
@@ -167,6 +168,29 @@ make live-tool-smoke
 
 It makes a real tool-capable provider interaction and prints only the resolved
 model, tool invocation count, and final assistant text.
+
+## Synthetic OpenAI-compatible backend (issue #22)
+
+Synthetic is a distinct API-key-backed provider, not an OpenRouter fallback and
+not an Anthropic/Claude subscription route. Select it with the normal harness
+tool loop, which continues to own the system prompt, `run_shell`,
+`reload_harness`, tool schema, and tool-result continuation:
+
+```bash
+./bin/chat --backend synthetic --model syn:large:text --prompt 'Summarize this repository.'
+make live-synthetic-smoke
+make live-synthetic-tool-smoke
+```
+
+The live commands use `SYNTHETIC_API_KEY` from the untracked repository `.env`
+or exported environment and are intentionally excluded from `make test`.
+They require an active Synthetic subscription or usage credits; a configured key
+without credits is rejected by the provider with HTTP 402.
+Synthetic aliases such as `syn:large:text` can rotate; use the Synthetic Models
+API to select and record an exact returned model ID for reproducible experiments.
+Prove the exact selected model's tool behavior with the tool smoke before using
+it in a mutation-capable harness experiment. See `docs/runtime.md` for the
+credential/runtime boundary.
 
 For final **opt-in, potentially billable** evidence that the JSONL supervisor
 can create an owned worktree and observe a real `run_shell` mutation, run this

@@ -35,6 +35,7 @@
       (run-codex-app-server-tests)
       (run-codex-backend-tests)
       (run-openrouter-adapter-tests)
+      (run-synthetic-adapter-tests)
       (run-tool-loop-tests)
       (run-chat-session-tests)
       (run-env-file-tests)
