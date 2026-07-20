@@ -19,6 +19,13 @@ session's log files. The snapshot's model and max-rounds are adopted unless you
 also pass --model/--max-rounds. Errors (no snapshot) fall back to a fresh session.
 OPENROUTER_API_KEY must be exported or present in .env.
 
+At startup the chat process loads the workspace env file (default
+/workspace/.env, i.e. the repo-root .env under the bind mount; override with
+HARNESS_ENV_FILE) and sets each KEY=value into its own environment so tools
+run through run_shell (e.g. git/gh needing GITHUB_TOKEN) inherit them.
+Variables already set in the process environment are not overridden. The
+loader logs the file path and the names it set on stderr, never the values.
+
 --supervised explicitly forces machine-stream interactive mode for a supervisor.
 It is the only mode that accepts a non-terminal transcript as persistent turns;
 normal terminal and piped one-shot behavior is unchanged. --fake selects the
@@ -157,6 +164,7 @@ if [ "$mode" = interactive ]; then
   fi
   exec "$container_runner" --writable-workspace "$container_interaction" \
     --env HARNESS_CHAT_MODE \
+    --env HARNESS_ENV_FILE \
     --env HARNESS_CHAT_MODEL \
     --env HARNESS_CHAT_MAX_ROUNDS \
     --env HARNESS_CHAT_SESSION_ID \
@@ -170,6 +178,7 @@ fi
 
 exec "$container_runner" --writable-workspace \
   --env HARNESS_CHAT_MODE \
+  --env HARNESS_ENV_FILE \
   --env HARNESS_CHAT_PROMPT \
   --env HARNESS_CHAT_MODEL \
   --env HARNESS_CHAT_MAX_ROUNDS \

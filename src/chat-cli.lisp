@@ -314,6 +314,77 @@ fresh session instead."
                   :max-rounds max-rounds
                   :path snapshot)))))))
 
+(defparameter *workspace-env-file*
+  "/workspace/.env"
+  "Default path to the workspace env file loaded into the process environment at
+chat startup. The file is bind-mounted from the repository root, so hosts edit it
+outside Docker. Override with the HARNESS_ENV_FILE environment variable (a
+container-visible path; bin/chat forwards HARNESS_ENV_FILE into the container).")
+
+(defun parse-env-file-line (line)
+  "Parse a single env-file LINE into (VALUES NAME VALUE), or NIL to skip.
+
+Blank lines and comments (# ...) are skipped. A line is NAME=VALUE, tolerating a
+leading `export ` and surrounding single or double quotes around VALUE. Names
+must match [A-Za-z_][A-Za-z0-9_]*; malformed lines are skipped."
+  (let* ((trimmed (string-trim '(#\Space #\Tab #\Return) line)))
+    (when (or (zerop (length trimmed))
+              (char= (char trimmed 0) #\#))
+      (return-from parse-env-file-line nil))
+    (when (and (>= (length trimmed) 7)
+               (string= (subseq trimmed 0 7) "export "))
+      (setf trimmed (string-left-trim '(#\Space #\Tab) (subseq trimmed 7))))
+    (let ((eq (position #\= trimmed)))
+      (unless (and eq (plusp eq))
+        (return-from parse-env-file-line nil))
+      (let ((name (string-right-trim '(#\Space #\Tab) (subseq trimmed 0 eq)))
+            (value (string-trim '(#\Space #\Tab) (subseq trimmed (1+ eq)))))
+        (unless (and (plusp (length name))
+                     (or (alpha-char-p (char name 0)) (char= (char name 0) #\_))
+                     (every (lambda (c) (or (alphanumericp c) (char= c #\_))) name))
+          (return-from parse-env-file-line nil))
+        ;; Strip one layer of matching surrounding quotes from the value.
+        (when (and (>= (length value) 2)
+                   (member (char value 0) '(#\" #\'))
+                   (char= (char value 0) (char value (1- (length value)))))
+          (setf value (subseq value 1 (1- (length value)))))
+        (values name value)))))
+
+(defun load-workspace-env-file (&optional (path (or (uiop:getenv "HARNESS_ENV_FILE")
+                                                    *workspace-env-file*)))
+  "Read PATH and set each KEY=value into the running process environment.
+
+Runs at chat startup so tools like run_shell (which inherit this process's
+environment) see workspace-provided secrets such as GITHUB_TOKEN without passing
+them through Docker. Variables already present in the process environment are
+left untouched, so an explicitly exported value wins over the file. Logs the file
+path and the names it set on *ERROR-OUTPUT* -- never the values. A missing file is
+not an error. Returns the list of variable names set."
+  (unless (and path (probe-file path))
+    (format *error-output* "~&chat: no workspace env file at ~A; using inherited process environment only.~%"
+            path)
+    (finish-output *error-output*)
+    (return-from load-workspace-env-file nil))
+  (let ((set-names '()))
+    (with-open-file (stream path :direction :input :external-format :utf-8)
+      (loop for line = (read-line stream nil :eof)
+            until (eq line :eof)
+            do (multiple-value-bind (name value) (parse-env-file-line line)
+                 (when name
+                   (let ((existing (uiop:getenv name)))
+                     (if (and existing (plusp (length existing)))
+                         nil ; keep an already-set value; do not override
+                         (progn
+                           (setf (uiop:getenv name) value)
+                           (push name set-names))))))))
+    (setf set-names (nreverse set-names))
+    (format *error-output* "~&chat: loaded workspace env file ~A into process environment; set ~D variable~:P~@[ (~{~A~^, ~})~].~%"
+            path (length set-names) set-names)
+    (finish-output *error-output*)
+    (log-interaction :info "env-file-loaded" :path (namestring path)
+                     :count (length set-names) :names set-names)
+    set-names))
+
 (defun run-chat-cli ()
   "Entry point for bin/chat after the system is loaded. Reads HARNESS_* env vars."
   (install-chat-fatal-debugger-hook)
@@ -341,6 +412,7 @@ fresh session instead."
     ;; stderr events, but the durable log basename is always an ISO-8601 UTC
     ;; timestamp.
     (configure-interaction-logging log-directory :session-id session-id)
+    (load-workspace-env-file)
     (when (and resume-requested (null resume-plan))
       (format *error-output*
               "~&No resumable session snapshot found under ~A; starting fresh.~%"

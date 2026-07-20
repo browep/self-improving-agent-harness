@@ -141,6 +141,13 @@ cp .env.example .env
 # Set OPENROUTER_API_KEY in .env; do not commit it.
 ```
 
+The repo-root `.env` is bind-mounted at `/workspace/.env`. Beyond
+`OPENROUTER_API_KEY`, put any other runtime secrets there (for example
+`GITHUB_TOKEN` for `git`/`gh` inside `run_shell`), one `KEY=value` per line: at
+startup `bin/chat`'s Lisp process reads the file and sets each variable into its
+own process environment, which the agent's shell commands inherit. Values are
+never logged, only the names that were set. See `docs/runtime.md` for details.
+
 Then run:
 
 ```bash

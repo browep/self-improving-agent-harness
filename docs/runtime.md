@@ -25,6 +25,8 @@ The wrapper rebuilds before every command, relying on Docker layer caching when 
 
 `OPENROUTER_API_KEY` is runtime configuration only. `bin/container` optionally forwards it from an untracked repository `.env` file or an explicitly exported host environment variable. It does not echo the value, write it into a trace, or bake it into the image.
 
+Other runtime secrets are supplied through the workspace env file rather than added as new Docker `--env` plumbing. The repository-root `.env` is bind-mounted at `/workspace/.env`; at startup `bin/chat`'s Lisp process reads that file and sets each `KEY=value` into its own process environment, so commands the agent runs through `run_shell` (for example `git`/`gh` needing `GITHUB_TOKEN`) inherit them. Supported line forms are `KEY=value`, an optional leading `export`, and optional matching single/double quotes around the value; blank lines and `#` comments are ignored. Variables already present in the process environment are left untouched, so an explicitly forwarded value wins over the file. Override the path with `HARNESS_ENV_FILE` (a container-visible path; `bin/chat` forwards this variable into the container). The loader logs the file path and the names it set on stderr (`chat: loaded workspace env file <path> ...`) and never the values.
+
 The supervisor live smoke requires an explicitly exported key (it does not load
 one from `.env`) and creates a temporary independent clone of the tested branch.
 The supervisor then creates its owned child worktree below a temporary parent,

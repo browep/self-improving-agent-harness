@@ -33,6 +33,7 @@
       (run-openrouter-adapter-tests)
       (run-tool-loop-tests)
       (run-chat-session-tests)
+      (run-env-file-tests)
       (run-shell-tool-tests)
       (run-reload-tests)
       (run-logging-tests)

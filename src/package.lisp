@@ -79,6 +79,9 @@
    #:run-interactive-loop
    #:run-one-shot
    #:run-chat-cli
+   #:*workspace-env-file*
+   #:parse-env-file-line
+   #:load-workspace-env-file
    #:handle-interactive-command
    #:chat-options
    #:chat-handlers

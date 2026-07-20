@@ -23,6 +23,7 @@
                (:file "tests/openrouter-adapter")
                (:file "tests/tool-loop")
                (:file "tests/chat-session")
+               (:file "tests/env-file")
                (:file "tests/shell-tool")
                (:file "tests/reload")
                (:file "tests/logging")
