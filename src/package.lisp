@@ -58,6 +58,16 @@
    #:completion-response-finish-reason
    #:completion-response-provider-request-id
    #:completion-response-usage
+   ;; Codex app-server JSON-RPC framing + redaction (issue #18)
+   #:codex-jsonrpc-request
+   #:codex-jsonrpc-notification-p
+   #:codex-jsonrpc-field
+   #:codex-encode-jsonrpc-message
+   #:codex-read-jsonrpc-message
+   #:codex-redact
+   #:codex-secret-key-p
+   #:*codex-secret-key-substrings*
+   #:*codex-redaction-marker*
    #:openrouter-backend
    #:make-openrouter-backend
    #:openrouter-backend-base-url

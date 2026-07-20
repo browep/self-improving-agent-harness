@@ -7,6 +7,7 @@
   :components ((:file "src/package")
                (:file "src/backend")
                (:file "src/logging")
+               (:file "src/codex-jsonrpc")
                (:file "src/shell-tool")
                (:file "src/reload")
                (:file "src/chat-session")
@@ -20,6 +21,7 @@
   :serial t
   :components ((:file "tests/package")
                (:file "tests/backend")
+               (:file "tests/codex-jsonrpc")
                (:file "tests/openrouter-adapter")
                (:file "tests/tool-loop")
                (:file "tests/chat-session")
