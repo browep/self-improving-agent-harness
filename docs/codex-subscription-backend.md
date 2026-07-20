@@ -15,10 +15,18 @@ not receive, store, or replay ChatGPT OAuth credentials.
 
 ## Selection
 
-Opt in with `HARNESS_BACKEND=codex` (chat/run entry points) or by constructing
-`make-codex-app-server-backend` directly. Default remains OpenRouter.
-`HARNESS_BACKEND=openai` is rejected: this harness does not ship an
-`OPENAI_API_KEY` / `api.openai.com` backend.
+Opt in from the chat CLI (preferred):
+
+```bash
+bin/chat --backend codex --codex-home .codex-home --model gpt-5-codex
+```
+
+`--codex-home` sets the container `CODEX_HOME` (repo-relative paths map under
+`/workspace/...`). Non-chat entry points can still use `HARNESS_BACKEND=codex`
+and `CODEX_HOME`, or construct `make-codex-app-server-backend` directly.
+Default remains OpenRouter. `--backend openai` / `HARNESS_BACKEND=openai` is
+rejected: this harness does not ship an `OPENAI_API_KEY` / `api.openai.com`
+backend.
 
 ## Rejected alternative: direct OpenAI API-key billing
 

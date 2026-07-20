@@ -194,15 +194,17 @@ never falls back to `OPENAI_API_KEY` / OpenAI Platform billing. There is **no**
 `openai-backend` / `api.openai.com` adapter in this harness: OpenAI-model usage
 on this path is subscription-only.
 
-The default OpenRouter path is unchanged. Select the subscription backend with:
+The default OpenRouter path is unchanged. Select the subscription backend with
+CLI flags (preferred over env vars):
 
 ```bash
-HARNESS_BACKEND=codex ./bin/chat --model gpt-5-codex ...
+./bin/chat --backend codex --codex-home .codex-home --model gpt-5-codex
 # or construct make-codex-app-server-backend directly
 ```
 
-`HARNESS_BACKEND=openai` is a hard error (Platform API-key billing is out of
-scope). Prove a working subscription session after a human Codex login:
+`--backend openai` / `HARNESS_BACKEND=openai` is a hard error (Platform API-key
+billing is out of scope). Prove a working subscription session after a human
+Codex login:
 
 ```
 HARNESS_LIVE_CODEX_SMOKE=1 bin/verify-codex-chatgpt-auth   # subscription turn; not in make test
