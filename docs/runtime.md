@@ -167,3 +167,26 @@ yet committed. Only sessions that ended after the snapshot writer was added have
 a `.history.json` to resume from; earlier sessions logged only diagnostic JSONL
 (truncated tool traffic, no first-class tool results) and cannot be replayed
 losslessly.
+
+## Codex ChatGPT subscription backend (opt-in, issue #18)
+
+The image includes a pinned official Codex CLI (`@openai/codex`, see the
+Dockerfile `CODEX_CLI_VERSION` arg). This enables an opt-in, subscription-backed
+backend that runs turns through `codex app-server` over local JSON-RPC.
+
+- No credentials are baked into the image. ChatGPT/Codex OAuth is completed by a
+  human at runtime and owned by Codex (keyring or `$CODEX_HOME/auth.json`).
+- The harness never reads, stores, logs, or reports OAuth tokens; only redacted,
+  non-secret metadata is retained. `auth.json` must be treated as a password.
+- Credential storage location: set `CODEX_HOME` to a dedicated, non-reporting,
+  writable path. Do NOT mount the host `~/.codex` into the container by default,
+  and keep any Codex credential volume out of report/log mounts.
+- Networking is required for the live path (Codex talks to its upstream), so it
+  is exercised via `bin/verify-codex-chatgpt-auth` (network on), never under
+  `make test` (which runs with `--no-network`).
+
+Prove a working subscription session after login:
+
+```
+HARNESS_LIVE_CODEX_SMOKE=1 CODEX_HOME=/some/writable/codex-home bin/verify-codex-chatgpt-auth
+```

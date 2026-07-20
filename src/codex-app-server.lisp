@@ -142,11 +142,13 @@ or a premature end of stream. All error text is redacted before it is raised."
     (codex-request connection "initialize" params)))
 
 (defparameter *codex-safe-account-keys*
-  '("authMode" "planType" "plan" "accountId" "email-present"
+  '("type" "planType" "plan" "accountId" "requiresOpenaiAuth"
     "rateLimit" "rateLimits" "capabilities" "model" "modelId")
   "Allow-list of non-secret account keys the harness may retain as evidence.
-Anything not on this list is dropped; secret-shaped keys are additionally
-redacted by CODEX-REDACT before this filter ever runs.")
+Validated against the pinned Codex app-server protocol schema (v0.144.6): the
+account object's auth discriminator is `type` (chatgpt|apiKey|...), not a
+top-level authMode. `email` is intentionally excluded (PII). Secret-shaped keys
+are additionally redacted by CODEX-REDACT before this filter runs.")
 
 (defun codex-account-safe-state (account)
   "Return an allow-listed, redacted, non-secret view of a decoded account object.
@@ -164,16 +166,29 @@ evidence and never contains OAuth material."
     out))
 
 (defun codex-account-auth-mode (account-or-state)
-  "Return the authMode string from a decoded account or safe-state object."
+  "Return the auth-mode string from a safe-state object.
+
+Per the pinned protocol schema the account object's discriminator is `type`
+(e.g. \"chatgpt\" or \"apiKey\")."
   (when (hash-table-p account-or-state)
-    (gethash "authMode" account-or-state)))
+    (gethash "type" account-or-state)))
+
+(defun codex-response-account (response)
+  "Return the inner `account` object from an account/read RESPONSE.
+
+Per the pinned protocol schema, account/read returns
+{ requiresOpenaiAuth, account: {...} }; a signed-out server may return a null
+account. Returns an empty object rather than NIL so downstream reads are safe."
+  (let ((account (and (hash-table-p response) (codex-jsonrpc-field response "account"))))
+    (if (hash-table-p account) account (make-hash-table :test #'equal))))
 
 (defun codex-read-account (connection)
   "Call account/read and return two values: the safe (allow-listed) account
-state and the raw decoded account object. The raw object is for internal
-inspection only and must be redacted before any external surfacing."
-  (let ((account (codex-request connection "account/read")))
-    (values (codex-account-safe-state account) account)))
+state and the raw decoded account/read response. The raw response is for
+internal inspection only and must be redacted before any external surfacing."
+  (let* ((response (codex-request connection "account/read"))
+         (account (codex-response-account response)))
+    (values (codex-account-safe-state account) response)))
 
 (defparameter *codex-authenticated-mode* "chatgpt"
   "The only authMode this workstream accepts. Per issue #18, apiKey or any other
@@ -229,6 +244,100 @@ non-secret completion metadata is returned; tokens never leave Codex."
         (codex-error "app-server closed the connection before login completed."))
       (when (codex-login-completed-p message)
         (return (codex-redact (codex-jsonrpc-field message "params")))))))
+
+(defun codex-thread-start (connection)
+  "Start a Codex thread and return its thread id string.
+
+Per the pinned protocol schema, thread/start returns { thread: { id, ... }, ... }."
+  (let* ((result (codex-request connection "thread/start"))
+         (thread (codex-jsonrpc-field result "thread"))
+         (id (and (hash-table-p thread) (codex-jsonrpc-field thread "id"))))
+    (unless (stringp id)
+      (codex-error "thread/start did not return a thread id."))
+    id))
+
+(defun codex-turn-start-params (thread-id text)
+  "Build read-only, no-approval turn/start params for a single text message.
+
+Keeps the turn tool-free and read-only: approvalPolicy=never means no approval
+round trips, and sandboxPolicy=readOnly forbids writes. This is the initial,
+harness-boundary-preserving posture required by issue #18."
+  (let ((params (make-hash-table :test #'equal))
+        (input (make-array 1))
+        (message (make-hash-table :test #'equal))
+        (sandbox (make-hash-table :test #'equal)))
+    (setf (gethash "type" message) "text"
+          (gethash "text" message) text
+          (aref input 0) message
+          (gethash "type" sandbox) "readOnly"
+          (gethash "threadId" params) thread-id
+          (gethash "input" params) input
+          (gethash "approvalPolicy" params) "never"
+          (gethash "sandboxPolicy" params) sandbox)
+    params))
+
+(defparameter *codex-turn-notification-limit* 10000
+  "Safety bound on notifications consumed while awaiting turn/completed, so a
+misbehaving server cannot spin this loop forever.")
+
+(defun codex-collect-turn (connection request-id)
+  "After a turn/start request (REQUEST-ID), read notifications until the turn
+completes, accumulating assistant text deltas.
+
+Returns two values: the accumulated assistant text and the redacted decoded
+turn/completed params. The turn/start response itself is consumed first.
+Signals on a failed turn or premature end of stream."
+  ;; Consume the turn/start response (its result carries the initial Turn).
+  (loop
+    (let ((message (codex-receive connection)))
+      (when (eq message :eof)
+        (codex-error "app-server closed the connection during turn/start."))
+      (cond
+        ((codex-jsonrpc-notification-p message) nil) ; ignore pre-response notes
+        ((eql (codex-jsonrpc-field message "id") request-id)
+         (let ((rpc-error (codex-jsonrpc-error-field message)))
+           (when rpc-error
+             (codex-error "turn/start failed: ~A"
+                          (redacted-codex-error-summary rpc-error))))
+         (return))
+        (t nil))))
+  ;; Then read notifications, accumulating deltas until turn/completed.
+  (let ((text (make-string-output-stream))
+        (count 0))
+    (loop
+      (when (> (incf count) *codex-turn-notification-limit*)
+        (codex-error "turn did not complete within the notification bound."))
+      (let ((message (codex-receive connection)))
+        (when (eq message :eof)
+          (codex-error "app-server closed the connection before turn/completed."))
+        (when (codex-jsonrpc-notification-p message)
+          (let ((method (codex-jsonrpc-field message "method"))
+                (params (codex-jsonrpc-field message "params")))
+            (cond
+              ((equal method "item/agentMessage/delta")
+               (let ((delta (and params (codex-jsonrpc-field params "delta"))))
+                 (when (stringp delta) (write-string delta text))))
+              ((equal method "turn/completed")
+               (let* ((turn (and params (codex-jsonrpc-field params "turn")))
+                      (status (and (hash-table-p turn)
+                                   (codex-jsonrpc-field turn "status"))))
+                 (when (equal status "failed")
+                   (codex-error "turn completed with failed status."))
+                 (return (values (get-output-stream-string text)
+                                 (codex-redact params))))))))))))
+
+(defun codex-run-turn (connection text &key (turn-method "turn/start"))
+  "Run one bounded, read-only, tool-free turn for TEXT.
+
+Starts a thread, sends a read-only turn/start, and collects assistant text until
+turn/completed. Returns two values: the assistant text and the redacted
+turn/completed params. TURN-METHOD is overridable for forward compatibility."
+  (let* ((thread-id (codex-thread-start connection))
+         (params (codex-turn-start-params thread-id text))
+         (request-id (codex-next-request-id connection))
+         (request (codex-jsonrpc-request request-id turn-method params)))
+    (codex-send connection request)
+    (codex-collect-turn connection request-id)))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Process lifecycle (production path; not exercised by deterministic tests).

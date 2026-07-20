@@ -85,6 +85,9 @@
    #:spawn-codex-app-server
    #:close-codex-connection
    #:with-codex-app-server
+   #:codex-run-turn
+   #:codex-thread-start
+   #:codex-response-account
    #:*codex-app-server-command*
    #:*codex-authenticated-mode*
    #:*codex-safe-account-keys*

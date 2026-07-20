@@ -96,37 +96,40 @@ two values: the connection and the output stream."
       (self-improving-agent-harness:codex-app-server-error () t))))
 
 (defun run-codex-account-and-auth-tests ()
-  ;; account/read: safe state keeps allow-listed keys and drops/redacts secrets.
-  (let ((account (cas-obj "authMode" "chatgpt"
-                          "planType" "plus"
-                          "access_token" "sk-secret-should-not-survive"
-                          "internalDebug" "drop-me")))
+  ;; account/read returns {account:{type:...}}; safe state keeps allow-listed keys.
+  (let ((response (cas-obj "requiresOpenaiAuth" nil
+                           "account" (cas-obj "type" "chatgpt"
+                                              "planType" "plus"
+                                              "email" "someone@example.com"
+                                              "access_token" "sk-secret-should-not-survive"))))
     (multiple-value-bind (conn out)
-        (cas-connection (list (cas-frame (cas-response 1 account))))
+        (cas-connection (list (cas-frame (cas-response 1 response))))
       (declare (ignore out))
       (multiple-value-bind (safe raw)
           (self-improving-agent-harness:codex-read-account conn)
-        (ensure-true (equal "chatgpt" (gethash "authMode" safe))
-                     "safe account state keeps authMode")
+        (ensure-true (equal "chatgpt" (gethash "type" safe))
+                     "safe account state keeps the account type discriminator")
         (ensure-true (equal "plus" (gethash "planType" safe))
                      "safe account state keeps planType")
+        (ensure-true (not (nth-value 1 (gethash "email" safe)))
+                     "safe account state drops email (PII, not allow-listed)")
         (ensure-true (not (nth-value 1 (gethash "access_token" safe)))
                      "safe account state drops the token key entirely")
-        (ensure-true (not (nth-value 1 (gethash "internalDebug" safe)))
-                     "safe account state drops non-allow-listed keys")
         ;; raw is returned for internal use but must not be surfaced unredacted.
-        (ensure-true (hash-table-p raw) "raw account object is returned for internal use")
+        (ensure-true (hash-table-p raw) "raw account response is returned for internal use")
         (let ((flat (with-output-to-string (s) (yason:encode safe s))))
           (ensure-true (not (search "should-not-survive" flat))
-                       "serialized safe state contains no token value")))))
-  ;; require-chatgpt-auth: accepts chatgpt, rejects apiKey and missing.
+                       "serialized safe state contains no token value")
+          (ensure-true (not (search "example.com" flat))
+                       "serialized safe state contains no email")))))
+  ;; require-chatgpt-auth: accepts chatgpt account type, rejects apiKey and missing.
   (let ((chatgpt (self-improving-agent-harness:codex-account-safe-state
-                  (cas-obj "authMode" "chatgpt"))))
+                  (cas-obj "type" "chatgpt"))))
     (ensure-true (equal "chatgpt"
                         (self-improving-agent-harness:codex-require-chatgpt-auth chatgpt))
-                 "chatgpt auth mode is accepted"))
+                 "chatgpt account type is accepted"))
   (let ((apikey (self-improving-agent-harness:codex-account-safe-state
-                 (cas-obj "authMode" "apiKey"))))
+                 (cas-obj "type" "apiKey"))))
     (handler-case
         (progn (self-improving-agent-harness:codex-require-chatgpt-auth apikey)
                (error "Test failed: apiKey auth must be rejected"))
@@ -177,9 +180,53 @@ two values: the connection and the output stream."
         (ensure-true (not (search "leak-me" flat))
                      "completed params redact any token field")))))
 
+(defun run-codex-turn-tests ()
+  ;; A real turn: thread/start (id 1) -> turn/start (id 2) response, then
+  ;; agentMessage deltas and a turn/completed notification.
+  (let ((frames (list (cas-frame (cas-response 1 (cas-obj "thread" (cas-obj "id" "t-123"))))
+                      (cas-frame (cas-response 2 (cas-obj "turn" (cas-obj "id" "turn-1"
+                                                                          "status" "in_progress"))))
+                      (cas-frame (cas-notification "item/agentMessage/delta" (cas-obj "delta" "hel")))
+                      (cas-frame (cas-notification "item/agentMessage/delta" (cas-obj "delta" "lo")))
+                      (cas-frame (cas-notification "turn/completed"
+                                                   (cas-obj "threadId" "t-123"
+                                                            "turn" (cas-obj "id" "turn-1"
+                                                                            "status" "completed")))))))
+    (multiple-value-bind (conn out) (cas-connection frames)
+      (let ((sent-before (length (cas-sent-messages out))))
+        (declare (ignore sent-before)))
+      (multiple-value-bind (text completed)
+          (self-improving-agent-harness:codex-run-turn conn "say hello")
+        (ensure-true (equal "hello" text) "assistant text is accumulated from deltas")
+        (ensure-true (hash-table-p completed) "turn/completed params are returned"))
+      ;; The client must have sent thread/start then turn/start with read-only policy.
+      (let* ((sent (cas-sent-messages out))
+             (methods (mapcar (lambda (m) (self-improving-agent-harness:codex-jsonrpc-field m "method")) sent)))
+        (ensure-true (member "thread/start" methods :test #'equal) "a thread/start was sent")
+        (ensure-true (member "turn/start" methods :test #'equal) "a turn/start was sent")
+        (let* ((turn (find "turn/start" sent :test #'equal
+                           :key (lambda (m) (self-improving-agent-harness:codex-jsonrpc-field m "method"))))
+               (params (self-improving-agent-harness:codex-jsonrpc-field turn "params")))
+          (ensure-true (equal "never" (gethash "approvalPolicy" params))
+                       "turn/start disables approvals (tool-free)")
+          (ensure-true (equal "readOnly" (gethash "type" (gethash "sandboxPolicy" params)))
+                       "turn/start uses a read-only sandbox")))))
+  ;; A failed turn signals.
+  (let ((frames (list (cas-frame (cas-response 1 (cas-obj "thread" (cas-obj "id" "t-1"))))
+                      (cas-frame (cas-response 2 (cas-obj "turn" (cas-obj "id" "x" "status" "in_progress"))))
+                      (cas-frame (cas-notification "turn/completed"
+                                                   (cas-obj "turn" (cas-obj "id" "x" "status" "failed")))))))
+    (multiple-value-bind (conn out) (cas-connection frames)
+      (declare (ignore out))
+      (handler-case
+          (progn (self-improving-agent-harness:codex-run-turn conn "hi")
+                 (error "Test failed: a failed turn must signal"))
+        (self-improving-agent-harness:codex-app-server-error () t)))))
+
 (defun run-codex-app-server-tests ()
   (run-codex-request-and-error-tests)
   (run-codex-account-and-auth-tests)
   (run-codex-login-tests)
+  (run-codex-turn-tests)
   (format t "Codex app-server supervisor tests passed.~%")
   t)

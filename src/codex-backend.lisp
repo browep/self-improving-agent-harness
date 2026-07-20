@@ -17,10 +17,11 @@
 ;;;;     numeric token/cost data (COMPLETION-RESPONSE-USAGE left without numeric
 ;;;;     values -> PROVIDER-ACCOUNTING-SUMMARY reports unavailable).
 
-(defparameter *codex-turn-method* "thread/runTurn"
-  "JSON-RPC method used to run one Codex turn. Doc-derived and MUST be validated
-against a pinned real Codex binary before the live path is trusted; overridable
-at runtime so a corrected method name needs no rebuild.")
+(defparameter *codex-turn-method* "turn/start"
+  "JSON-RPC method used to start one Codex turn, per the pinned app-server
+protocol schema (@openai/codex 0.144.6). A turn is thread/start + turn/start,
+with assistant text streamed via item/agentMessage/delta and finalized by a
+turn/completed notification (see codex-run-turn). Overridable at runtime.")
 
 (defparameter *codex-default-model* "gpt-5-codex"
   "Model identifier recorded when neither the request nor Codex names one. This
@@ -53,68 +54,28 @@ method name. No credentials are captured here."
                  :connection-factory connection-factory
                  :turn-method turn-method))
 
-(defun codex-turn-params (request)
-  "Build the (tool-free, read-only) turn params for REQUEST.
+(defun codex-request-text (request)
+  "Flatten REQUEST messages into a single prompt string for a text turn.
 
-Only the provider-neutral messages and a small allow-list of options are
-forwarded. Tools are explicitly empty: this adapter never enables Codex-native
-command/filesystem tools nor the harness run_shell loop."
-  (let ((params (make-hash-table :test #'equal))
-        (messages (make-array 0 :adjustable t :fill-pointer 0)))
-    (dolist (message (completion-request-messages request))
-      (let ((m (make-hash-table :test #'equal)))
-        (setf (gethash "role" m) (or (getf message :role) "user")
-              (gethash "content" m) (or (getf message :content) ""))
-        (vector-push-extend m messages)))
-    (setf (gethash "input" params) messages
-          ;; Explicitly disable tools for the initial subscription-auth session.
-          (gethash "tools" params) (make-array 0)
-          (gethash "toolChoice" params) "none")
-    (let ((model (completion-request-model request)))
-      (when (and (stringp model) (plusp (length model)))
-        (setf (gethash "model" params) model)))
-    params))
-
-(defun codex-turn-text (result)
-  "Extract assistant text from a decoded turn RESULT, defaulting to empty string.
-
-Tolerant of a few plausible shapes since the exact turn schema is doc-derived:
-a top-level \"text\"/\"output\" string, or a message-like object with \"content\"."
-  (or (let ((text (codex-jsonrpc-field result "text")))
-        (and (stringp text) text))
-      (let ((output (codex-jsonrpc-field result "output")))
-        (and (stringp output) output))
-      (let* ((message (codex-jsonrpc-field result "message"))
-             (content (and message (codex-jsonrpc-field message "content"))))
-        (and (stringp content) content))
-      ""))
-
-(defun codex-turn-usage (result)
-  "Return a usage plist ONLY for authoritative numeric fields Codex reports.
-
-If Codex does not supply numeric usage (the expected case for a subscription
-session), this returns NIL, so PROVIDER-ACCOUNTING-SUMMARY reports token/cost as
-`unavailable` rather than fabricating zeros."
-  (let ((usage (codex-jsonrpc-field result "usage")))
-    (when (hash-table-p usage)
-      (let ((plist '()))
-        (flet ((numeric (json-key plist-key)
-                 (let ((v (codex-jsonrpc-field usage json-key)))
-                   (when (realp v) (setf plist (list* plist-key v plist))))))
-          (numeric "inputTokens" :prompt-tokens)
-          (numeric "outputTokens" :completion-tokens)
-          (numeric "totalTokens" :total-tokens)
-          (numeric "costUsd" :cost-usd))
-        plist))))
+The Codex turn/start input is a list of text UserInput items; this adapter sends
+one text item built from the request's message contents in order."
+  (with-output-to-string (out)
+    (loop for message in (completion-request-messages request)
+          for content = (getf message :content)
+          when (and (stringp content) (plusp (length content)))
+            do (write-string content out)
+               (write-char #\Newline out))))
 
 (defmethod complete ((backend codex-app-server-backend) request)
-  "Run one bounded, tool-free turn through an authenticated Codex session.
+  "Run one bounded, read-only, tool-free turn through an authenticated Codex session.
 
 Opens a connection via the backend's factory, performs the initialize handshake,
-reads account state, REQUIRES authMode == chatgpt (hard-failing on apiKey /
-missing / other with no OPENAI_API_KEY fallback), runs a single tool-free turn,
-and returns a COMPLETION-RESPONSE. The connection is always closed. Only
-redacted, non-secret metadata is logged; no OAuth token is read or surfaced."
+reads account state, REQUIRES chatgpt auth (hard-failing on apiKey / missing /
+other with no OPENAI_API_KEY fallback), runs a single read-only turn
+(thread/start + turn/start, tools/approvals disabled), and returns a
+COMPLETION-RESPONSE. The connection is always closed. Only redacted, non-secret
+metadata is logged; no OAuth token is read or surfaced. Accounting stays
+unavailable: a subscription turn does not report authoritative token/cost here."
   (let ((connection (funcall (codex-backend-connection-factory backend))))
     (unwind-protect
          (progn
@@ -127,29 +88,26 @@ redacted, non-secret metadata is logged; no OAuth token is read or surfaced."
                                 :plan (or (gethash "planType" safe-state)
                                           (gethash "plan" safe-state)
                                           "unavailable")))
-             (let* ((result (codex-request connection
-                                           (codex-backend-turn-method backend)
-                                           (codex-turn-params request)))
-                    (text (codex-turn-text result))
-                    (model (or (codex-jsonrpc-field result "model")
-                               (completion-request-model request)
-                               *codex-default-model*))
-                    (usage (codex-turn-usage result)))
-               (log-interaction :info "codex-turn-completed"
-                                :provider (backend-name backend)
-                                :model model
-                                :output-length (length text)
-                                :usage-state (if usage "actual" "unavailable"))
-               (make-completion-response
-                :text text
-                :model model
-                ;; RAW is a redacted, non-secret view; never the unredacted turn.
-                :raw (codex-redact result)
-                :tool-calls '()
-                :finish-reason (or (codex-jsonrpc-field result "finishReason")
-                                   "stop")
-                :provider-request-id (codex-jsonrpc-field result "id")
-                :usage usage))))
+             (multiple-value-bind (text completed-params)
+                 (codex-run-turn connection (codex-request-text request)
+                                 :turn-method (codex-backend-turn-method backend))
+               (let ((model (or (completion-request-model request)
+                                *codex-default-model*)))
+                 (log-interaction :info "codex-turn-completed"
+                                  :provider (backend-name backend)
+                                  :model model
+                                  :output-length (length text)
+                                  :usage-state "unavailable")
+                 (make-completion-response
+                  :text text
+                  :model model
+                  ;; RAW is the redacted turn/completed params; never unredacted.
+                  :raw completed-params
+                  :tool-calls '()
+                  :finish-reason "stop"
+                  :provider-request-id nil
+                  ;; No authoritative usage from a subscription turn -> unavailable.
+                  :usage nil)))))
       (close-codex-connection connection))))
 
 ;;; ---------------------------------------------------------------------------
@@ -204,17 +162,14 @@ fallback. Never emits or persists OAuth material."
                                  (gethash "plan" safe-state))))
                    ;; A completed login notification alone is insufficient; run a
                    ;; real turn to prove the session is usable.
-                   (let* ((request (make-completion-request
-                                    :messages (list (list :role "user"
-                                                          :content *codex-verify-prompt*))))
-                          (result (codex-request connection turn-method
-                                                 (codex-turn-params request)))
-                          (text (codex-turn-text result))
-                          (model (or (codex-jsonrpc-field result "model")
-                                     *codex-default-model*)))
+                   (multiple-value-bind (text completed-params)
+                       (codex-run-turn connection *codex-verify-prompt*
+                                       :turn-method turn-method)
+                     (declare (ignore completed-params))
                      (values
                       (codex-verification-evidence
-                       :status "ok" :auth-mode auth-mode :model model :plan plan
+                       :status "ok" :auth-mode auth-mode :model *codex-default-model*
+                       :plan plan
                        :codex-version codex-version
                        :outcome (if (plusp (length text)) "completed" "empty"))
                       t)))))

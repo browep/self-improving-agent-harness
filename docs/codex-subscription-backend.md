@@ -86,3 +86,34 @@ HARNESS_LIVE_CODEX_SMOKE=1 bin/verify-codex-chatgpt-auth
 
 Deterministic coverage: `tests/codex-verify-cli.sh` (opt-in gating, Docker-free)
 and `tests/codex-backend.lisp` (success/failure/redaction of the verify routine).
+
+## Verified protocol facts (@openai/codex 0.144.6, pinned)
+
+Validated against the pinned Codex CLI in the runtime image using
+`codex app-server generate-json-schema --out <dir>` (authoritative, not doc-derived):
+
+- `codex app-server` exists (marked experimental) and defaults to `stdio://`
+  transport — matching the harness's stdio JSON-RPC supervisor.
+- Handshake/account/login method strings: `initialize`, `account/read`,
+  `account/login/start`, and the `account/login/completed` server notification.
+  Login supports `type: "chatgpt"` and `type: "chatgptDeviceCode"`.
+- `account/read` returns `{ requiresOpenaiAuth, account: { type, planType, email, ... } }`.
+  The auth discriminator is `account.type` (`"chatgpt"` | `"apiKey"` | ...), NOT
+  a top-level `authMode`. The harness requires `account.type == "chatgpt"` and
+  drops `email` (PII) from retained evidence.
+- A turn is `thread/start` (returns `{ thread: { id } }`) followed by
+  `turn/start` (`{ threadId, input: [{type:"text", text}], approvalPolicy,
+  sandboxPolicy }`). The harness sends `approvalPolicy: "never"` and
+  `sandboxPolicy: { type: "readOnly" }` to stay tool-free and read-only.
+- Assistant text streams via `item/agentMessage/delta` `{delta}` notifications
+  and the turn ends at a `turn/completed` `{turn:{status,...}}` notification.
+  `turn/completed` with `status: "failed"` is treated as a turn failure.
+
+Corrected in the implementation accordingly (earlier commits used the
+doc-derived `thread/runTurn` / top-level `authMode`, which are wrong).
+
+STILL UNPROVEN and owned by an independent evaluator/human: an actual
+subscription-billed live turn (`bin/verify-codex-chatgpt-auth` after a real
+ChatGPT login), and confirmation that a read-only tool-free turn is accepted by
+a live subscription session. The deterministic tests exercise these code paths
+against a fake server shaped to the pinned schema, not a live account.
