@@ -184,6 +184,35 @@ tested branch into a disposable primary checkout, asks the supervisor to make
 its own child worktree, verifies the child diff and pinned parent-side test
 command, and removes all temporary artifacts afterwards.
 
+## Codex ChatGPT subscription backend (opt-in, issue #18)
+
+An opt-in backend runs turns through the existing ChatGPT/Codex subscription via
+the official local `codex app-server` (JSON-RPC over stdio). The image installs
+a pinned `@openai/codex` CLI; no credentials are baked in and the harness never
+reads, stores, or logs OAuth tokens. It requires `account.type == "chatgpt"` and
+never falls back to `OPENAI_API_KEY` / OpenAI Platform billing. There is **no**
+`openai-backend` / `api.openai.com` adapter in this harness: OpenAI-model usage
+on this path is subscription-only.
+
+The default OpenRouter path is unchanged. Select the subscription backend with
+CLI flags (preferred over env vars):
+
+```bash
+./bin/chat --backend codex --codex-home .codex-home --model gpt-5-codex
+# or construct make-codex-app-server-backend directly
+```
+
+`--backend openai` / `HARNESS_BACKEND=openai` is a hard error (Platform API-key
+billing is out of scope). Prove a working subscription session after a human
+Codex login:
+
+```
+HARNESS_LIVE_CODEX_SMOKE=1 bin/verify-codex-chatgpt-auth   # subscription turn; not in make test
+```
+
+See `docs/codex-subscription-backend.md` (decision record + verified protocol
+facts) and `docs/runtime.md` (credential/`CODEX_HOME` policy).
+
 ## Chat CLI
 
 `bin/chat` runs the harness `run_shell` tool inside its Docker container. It has

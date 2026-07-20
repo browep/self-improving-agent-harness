@@ -73,6 +73,32 @@ the transport layer owns conversion to OpenRouter's JSON field names."
 (defun openrouter-json-name (keyword)
   (substitute #\_ #\- (string-downcase (symbol-name keyword))))
 
+(defun sanitize-json-control-characters (string)
+  "Return STRING with JSON-illegal raw control characters made safe.
+
+RFC 8259 forbids unescaped U+0000..U+001F in JSON strings. YASON escapes the
+five short forms (\\b \\t \\n \\f \\r) but emits the remaining control
+characters (NUL, U+0001..U+0007, U+000B, U+000E..U+001F including ESC/U+001B)
+RAW, which produces a body a strict server rejects with \"JSON parsing failed\"
+(HTTP 400). Tool output frequently contains such bytes (e.g. ANSI ESC color
+codes). We replace each such character with its \\uXXXX escape sequence as
+literal text; YASON then escapes the backslash-safe result, so the value round
+trips as the intended escape rather than an invalid raw byte."
+  (if (and (stringp string)
+           (some (lambda (character)
+                   (let ((code (char-code character)))
+                     (and (< code #x20)
+                          (not (member code '(#x08 #x09 #x0a #x0c #x0d))))))
+                 string))
+      (with-output-to-string (out)
+        (loop for character across string
+              for code = (char-code character)
+              do (if (and (< code #x20)
+                          (not (member code '(#x08 #x09 #x0a #x0c #x0d))))
+                     (format out "\\u~4,'0x" code)
+                     (write-char character out))))
+      string))
+
 (defun openrouter-json-value (value)
   (cond
     ((and (listp value) (keywordp (first value)))
@@ -82,6 +108,7 @@ the transport layer owns conversion to OpenRouter's JSON field names."
                       (openrouter-json-value item)))
        object))
     ((listp value) (mapcar #'openrouter-json-value value))
+    ((stringp value) (sanitize-json-control-characters value))
     (t value)))
 
 (defun openrouter-request-json (request)
@@ -646,10 +673,17 @@ Successful responses are returned as COMPLETION-RESPONSE values."
                                       :timeout-seconds (or timeout 0)
                                       :message message
                                       :body-snippet
-                                      (truncate-provider-error-body body-text))
+                                      (truncate-provider-error-body body-text)
+                                      ;; Include the outgoing request body so a
+                                      ;; malformed-request 4xx (e.g. a serializer
+                                      ;; bug producing invalid JSON) is
+                                      ;; diagnosable from the error event itself,
+                                      ;; not only the separate http-request-started.
+                                      :request-bytes request-bytes
+                                      :request-snippet request-json)
                      (log-http-text :error "provider-http-error"
-                                    "attempt=~A phase=http-status status=~D duration=~,3Fs ~A"
-                                    attempt-id status-code duration message)
+                                    "attempt=~A phase=http-status status=~D duration=~,3Fs request-bytes=~D ~A"
+                                    attempt-id status-code duration request-bytes message)
                      (error "~A" message)))
                  (openrouter-response-from-json (yason:parse body-text))))))
         (error (condition)

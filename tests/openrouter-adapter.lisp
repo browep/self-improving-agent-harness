@@ -188,6 +188,34 @@
                 (self-improving-agent-harness::openrouter-response-body-bytes "ab")
                 "openrouter-response-body-bytes handles decoded strings")
 
+  ;; Regression: a message with JSON-illegal raw control chars (NUL, ESC, ...)
+  ;; must serialize to VALID JSON, not an unescaped raw byte that a strict server
+  ;; rejects with "JSON parsing failed" (HTTP 400).
+  (let* ((request (self-improving-agent-harness:make-completion-request
+                   :model "m"
+                   :messages (list (list :role "user"
+                                         :content (format nil "nul~C esc~C keep-tab~C keep-nl~C end"
+                                                          (code-char 0) (code-char 27)
+                                                          (code-char 9) (code-char 10))))))
+         (json (self-improving-agent-harness::openrouter-request-json request)))
+    ;; No raw control byte below 0x20 survives except the JSON-legal \t and \n
+    ;; that YASON escapes itself (so the serialized text has none raw at all).
+    (ensure-true (notany (lambda (ch)
+                           (let ((code (char-code ch)))
+                             (and (< code #x20)
+                                  (not (member code '(#x09 #x0a #x0d))))))
+                         json)
+                 "serialized request contains no JSON-illegal raw control characters")
+    ;; The illegal chars are emitted as visible \uXXXX escape tokens.
+    (ensure-true (search "u0000" json)
+                 "NUL is escaped as a \\u0000 token in the serialized request")
+    (ensure-true (or (search "u001b" json) (search "u001B" json))
+                 "ESC is escaped as a \\u001b token in the serialized request"))
+  ;; sanitize-json-control-characters leaves clean strings untouched (identity).
+  (ensure-true (string= "plain text"
+                        (self-improving-agent-harness::sanitize-json-control-characters "plain text"))
+               "sanitizer is an identity on strings with no illegal control chars")
+
   (format t "OpenRouter adapter payload, response, and JSON tests passed.~%")
   t)
 

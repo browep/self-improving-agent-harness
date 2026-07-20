@@ -1,6 +1,6 @@
 # Docker-first Common Lisp workflow. No host Lisp runtime is required.
 
-.PHONY: image test run experiment-example baseline report configuration-comparison source-mutation live-smoke live-tool-smoke live-chat-supervisor-tool-smoke chat repl clean
+.PHONY: image test run experiment-example baseline report configuration-comparison source-mutation live-smoke live-tool-smoke live-chat-supervisor-tool-smoke verify-codex-chatgpt-auth chat repl clean
 
 image:
 	docker build --tag self-improving-agent-harness:dev .
@@ -35,6 +35,11 @@ live-tool-smoke:
 # Opt-in paid OpenRouter evidence; deliberately not a dependency of test.
 live-chat-supervisor-tool-smoke:
 	./tests/chat-supervisor-live-tool-smoke.sh
+
+# Opt-in, billable Codex ChatGPT subscription verification; NOT a dependency of
+# test. Requires HARNESS_LIVE_CODEX_SMOKE=1 and a completed Codex ChatGPT login.
+verify-codex-chatgpt-auth:
+	./bin/verify-codex-chatgpt-auth
 
 chat:
 	./bin/chat

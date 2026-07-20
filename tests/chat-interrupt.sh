@@ -9,17 +9,28 @@ cleanup() {
   [ -z "$chat_pid" ] || kill "$chat_pid" 2>/dev/null || true
   [ -z "$input_pid" ] || kill "$input_pid" 2>/dev/null || true
   rm -f "$output"
+  [ -z "${fifo:-}" ] || rm -f "$fifo"
 }
 trap cleanup EXIT HUP INT TERM
 
 # Keep stdin open while the chat waits at its prompt; no provider request is made.
-sleep 30 | env \
+# Use a FIFO fed by a tracked background `sleep` rather than an anonymous pipe:
+# an anonymous `sleep 30 | ...` writer inherits the child's stdout pipe and, once
+# the chat exits early on SIGINT (the whole point of this test), lingers for the
+# full sleep holding that pipe open. That blocks readers of run-tests.lisp's
+# captured output and hangs `make test`. Tracking the holder's PID lets cleanup
+# release it immediately.
+fifo=$(mktemp -u)
+mkfifo "$fifo"
+( sleep 30 >"$fifo" 2>/dev/null || true ) &
+input_pid=$!
+env \
   OPENROUTER_API_KEY=test-key \
   HARNESS_CHAT_MODE=interactive \
   HARNESS_CHAT_MODEL=test/model \
   HARNESS_CHAT_MAX_ROUNDS=1 \
   HARNESS_CHAT_SESSION_ID=interrupt-session-test \
-  sbcl --noinform --load scripts/chat.lisp >"$output" 2>&1 &
+  sbcl --noinform --load scripts/chat.lisp <"$fifo" >"$output" 2>&1 &
 chat_pid=$!
 
 # Wait until the script has loaded and is blocked in READ-LINE before SIGINT.

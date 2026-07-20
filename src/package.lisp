@@ -58,10 +58,57 @@
    #:completion-response-finish-reason
    #:completion-response-provider-request-id
    #:completion-response-usage
+   ;; Codex app-server JSON-RPC framing + redaction (issue #18)
+   #:codex-jsonrpc-request
+   #:codex-jsonrpc-notification-p
+   #:codex-jsonrpc-field
+   #:codex-encode-jsonrpc-message
+   #:codex-read-jsonrpc-message
+   #:codex-redact
+   #:codex-secret-key-p
+   #:*codex-secret-key-substrings*
+   #:*codex-redaction-marker*
+   ;; Codex app-server supervisor + JSON-RPC client (issue #18, phase 2)
+   #:codex-app-server-error
+   #:codex-app-server-error-reason
+   #:codex-connection
+   #:make-codex-connection-from-streams
+   #:codex-request
+   #:codex-initialize
+   #:codex-read-account
+   #:codex-account-safe-state
+   #:codex-account-auth-mode
+   #:codex-require-chatgpt-auth
+   #:codex-login-start
+   #:codex-wait-for-login
+   #:codex-login-completed-p
+   #:spawn-codex-app-server
+   #:close-codex-connection
+   #:with-codex-app-server
+   #:codex-run-turn
+   #:codex-thread-start
+   #:codex-response-account
+   #:*codex-app-server-command*
+   #:*codex-authenticated-mode*
+   #:*codex-safe-account-keys*
+   ;; Codex app-server backend adapter (issue #18, phase 4)
+   #:codex-app-server-backend
+   #:make-codex-app-server-backend
+   #:codex-backend-turn-method
+   #:codex-backend-connection-factory
+   #:*codex-turn-method*
+   #:*codex-default-model*
+   ;; Codex post-OAuth verification (issue #18, phase 5)
+   #:verify-codex-chatgpt-auth
+   #:codex-verification-evidence
+   #:format-codex-verification-evidence
+   #:*codex-verify-prompt*
    #:openrouter-backend
    #:make-openrouter-backend
    #:openrouter-backend-base-url
    #:openrouter-backend-api-key
+   #:select-chat-backend
+   #:backend-api-key-configured-p
    #:run-harness
    ;; chat CLI (reloadable via reload_harness)
    #:+chat-input-prompt+

@@ -23,7 +23,9 @@ The wrapper rebuilds before every command, relying on Docker layer caching when 
 
 ## Credential handling
 
-`OPENROUTER_API_KEY` is runtime configuration only. `bin/container` optionally forwards it from an untracked repository `.env` file or an explicitly exported host environment variable. It does not echo the value, write it into a trace, or bake it into the image.
+`OPENROUTER_API_KEY` is runtime configuration only (OpenRouter path). `bin/container` optionally forwards it, and optional `HARNESS_BACKEND` / `CODEX_HOME`, from an untracked repository `.env` file or an explicitly exported host environment variable. It does not echo values, write them into a trace, or bake them into the image.
+
+`bin/chat --backend openrouter|codex` selects the provider (default openrouter). `--backend codex` pairs with `--codex-home PATH` (mapped into the container as `CODEX_HOME`). The same values can still be supplied via `HARNESS_BACKEND` / `CODEX_HOME` for non-chat entry points. `HARNESS_BACKEND=openai` / `--backend openai` and any `OPENAI_API_KEY` / `api.openai.com` path are unsupported: OpenAI-model usage in this harness is subscription-only through Codex.
 
 Other runtime secrets are supplied through the workspace env file rather than added as new Docker `--env` plumbing. The repository-root `.env` is bind-mounted at `/workspace/.env`; at startup `bin/chat`'s Lisp process reads that file and sets each `KEY=value` into its own process environment, so commands the agent runs through `run_shell` (for example `git`/`gh` needing `GITHUB_TOKEN`) inherit them. Supported line forms are `KEY=value`, an optional leading `export`, and optional matching single/double quotes around the value; blank lines and `#` comments are ignored. Variables already present in the process environment are left untouched, so an explicitly forwarded value wins over the file. Override the path with `HARNESS_ENV_FILE` (a container-visible path; `bin/chat` forwards this variable into the container). The loader logs the file path and the names it set on stderr (`chat: loaded workspace env file <path> ...`) and never the values.
 
@@ -167,3 +169,29 @@ yet committed. Only sessions that ended after the snapshot writer was added have
 a `.history.json` to resume from; earlier sessions logged only diagnostic JSONL
 (truncated tool traffic, no first-class tool results) and cannot be replayed
 losslessly.
+
+## Codex ChatGPT subscription backend (opt-in, issue #18)
+
+The image includes a pinned official Codex CLI (`@openai/codex`, see the
+Dockerfile `CODEX_CLI_VERSION` arg). This enables an opt-in, subscription-backed
+backend that runs turns through `codex app-server` over local JSON-RPC.
+Select it with `bin/chat --backend codex --codex-home PATH` (or
+`make-codex-app-server-backend` / `HARNESS_BACKEND=codex` for non-chat entry
+points). There is no OpenAI Platform API-key adapter; `--backend openai` errors.
+
+- No credentials are baked into the image. ChatGPT/Codex OAuth is completed by a
+  human at runtime and owned by Codex (keyring or `$CODEX_HOME/auth.json`).
+- The harness never reads, stores, logs, or reports OAuth tokens; only redacted,
+  non-secret metadata is retained. `auth.json` must be treated as a password.
+- Credential storage location: set `CODEX_HOME` to a dedicated, non-reporting,
+  writable path. Do NOT mount the host `~/.codex` into the container by default,
+  and keep any Codex credential volume out of report/log mounts.
+- Networking is required for the live path (Codex talks to its upstream), so it
+  is exercised via `bin/verify-codex-chatgpt-auth` (network on), never under
+  `make test` (which runs with `--no-network`).
+
+Prove a working subscription session after login:
+
+```
+HARNESS_LIVE_CODEX_SMOKE=1 CODEX_HOME=/some/writable/codex-home bin/verify-codex-chatgpt-auth
+```

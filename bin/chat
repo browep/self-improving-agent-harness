@@ -1,14 +1,17 @@
 #!/usr/bin/env sh
-# Run an OpenRouter chat/tool-call session inside the project Docker runtime.
+# Run a chat/tool-call session inside the project Docker runtime.
 set -eu
 
 usage() {
-  cat <<'EOF'
-Usage: bin/chat [-c|--continue] [--model MODEL] [--max-rounds N] [--session-id ID] [--prompt TEXT] [--supervised] [--fake]
+  cat <<'USAGE'
+Usage: bin/chat [-c|--continue] [--backend BACKEND] [--codex-home PATH]
+                [--model MODEL] [--max-rounds N] [--session-id ID]
+                [--prompt TEXT] [--supervised] [--fake]
 
-With --prompt, run one prompt through OpenRouter and the harness tool loop until
-it returns a final response. Without --prompt, a terminal stdin/stdout starts
-an interactive multi-turn session; type /exit or /quit, press Ctrl-C, or send EOF to leave.
+With --prompt, run one prompt through the selected backend and the harness tool
+loop until it returns a final response. Without --prompt, a terminal stdin/stdout
+starts an interactive multi-turn session; type /exit or /quit, press Ctrl-C, or
+send EOF to leave.
 Interactive slash commands: /reload reloads harness sources in-process; /max-rounds [N] shows or sets the live tool-loop limit.
 Piped stdin remains a one-shot prompt and is never interpreted as a transcript.
 
@@ -17,7 +20,18 @@ agent-logs/*.history.json snapshot is reloaded as the starting conversation
 (including tool calls and results), and the resumed turns append to that
 session's log files. The snapshot's model and max-rounds are adopted unless you
 also pass --model/--max-rounds. Errors (no snapshot) fall back to a fresh session.
-OPENROUTER_API_KEY must be exported or present in .env.
+
+--backend selects the provider adapter (CLI; preferred over env):
+  openrouter  (default) OpenRouter Chat Completions via OPENROUTER_API_KEY
+  codex       ChatGPT/Codex *subscription* via local codex app-server (no API key)
+
+OpenAI Platform API-key billing (OPENAI_API_KEY / api.openai.com) is not available.
+HARNESS_BACKEND=openai is rejected. --backend openai errors at the CLI.
+
+--codex-home PATH sets CODEX_HOME for the Codex subscription backend (OAuth home
+with auth.json). Relative paths are resolved under the repo and mapped to the
+container workspace (/workspace/...). Required in practice for --backend codex
+after a human `codex login`. Ignored for openrouter.
 
 At startup the chat process loads the workspace env file (default
 /workspace/.env, i.e. the repo-root .env under the bind mount; override with
@@ -32,7 +46,9 @@ normal terminal and piped one-shot behavior is unchanged. --fake selects the
 deterministic no-provider backend for offline integration tests only.
 
 Defaults:
-  --model       openai/gpt-4.1-mini (an exact OpenRouter model ID)
+  --backend     openrouter
+  --model       openai/gpt-4.1-mini (exact OpenRouter model ID; for codex use a
+                Codex/subscription model id such as gpt-5-codex)
   --max-rounds  60
   --session-id  an ISO-8601 UTC timestamp session id (generated when omitted)
 
@@ -42,16 +58,24 @@ workspace checkout. Non-timestamp values still work for stderr correlation, but
 the log file basename is always an ISO timestamp. Without --session-id, bin/chat
 generates a fresh UTC timestamp; it is not a credential and not a resume token.
 
-Pass the Models API's `id` field to --model, not a display name. Browse
-https://openrouter.ai/models or query https://openrouter.ai/api/v1/models;
-this chat supplies run_shell and reload_harness, so choose a model supporting the `tools` parameter.
+For --backend openrouter, pass the Models API's `id` field to --model, not a
+display name. Browse https://openrouter.ai/models or query
+https://openrouter.ai/api/v1/models; this chat supplies run_shell and
+reload_harness, so choose a model supporting the `tools` parameter.
 
 One-shot failures are non-zero. Interactive failed turns are reported on stderr
 and the session continues with its previous history; a later normal exit is
 non-zero if any turn failed. All Lisp execution stays in Docker.
-EOF
+
+Examples:
+  bin/chat --model openai/gpt-4.1-mini --prompt 'hello'
+  bin/chat --backend codex --codex-home .codex-home --model gpt-5-codex
+USAGE
 }
 
+backend=openrouter
+codex_home=
+codex_home_supplied=false
 model=openai/gpt-4.1-mini
 max_rounds=60
 session_id=
@@ -67,6 +91,12 @@ while [ "$#" -gt 0 ]; do
     --help|-h) usage; exit 0 ;;
     -c|--continue)
       continue_session=true; shift ;;
+    --backend)
+      [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --backend requires a value' >&2; exit 2; }
+      backend=$2; shift 2 ;;
+    --codex-home)
+      [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --codex-home requires a path' >&2; exit 2; }
+      codex_home=$2; codex_home_supplied=true; shift 2 ;;
     --model)
       [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --model requires a value' >&2; exit 2; }
       model=$2; shift 2 ;;
@@ -103,6 +133,28 @@ else
   session_id=$(date -u +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null) ||     session_id=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]+"Z")')
 fi
 
+# Normalize backend name (case-insensitive).
+backend_normalized=$(printf '%s' "$backend" | tr '[:upper:]' '[:lower:]')
+case "$backend_normalized" in
+  openrouter|codex) backend=$backend_normalized ;;
+  openai)
+    printf '%s\n' 'bin/chat: --backend openai is not supported (no OPENAI_API_KEY / OpenAI Platform billing). Use --backend codex for ChatGPT/Codex subscription usage, or openrouter.' >&2
+    exit 2
+    ;;
+  *)
+    printf '%s\n' "bin/chat: --backend must be openrouter or codex, got: $backend" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$codex_home_supplied" = true ]; then
+  [ -n "$codex_home" ] || { printf '%s\n' 'bin/chat: --codex-home must not be empty' >&2; exit 2; }
+fi
+if [ "$backend" = openrouter ] && [ "$codex_home_supplied" = true ]; then
+  printf '%s\n' 'bin/chat: --codex-home is only valid with --backend codex' >&2
+  exit 2
+fi
+
 mode=one-shot
 if [ "$prompt_supplied" = false ]; then
   if [ "$supervised" = true ]; then
@@ -124,9 +176,54 @@ fi
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 container_runner=${HARNESS_CHAT_RUNNER:-"$repo_root/bin/container"}
-if [ "$fake_backend" = false ] && [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$repo_root/.env" ]; then
-  printf '%s\n' 'bin/chat: OPENROUTER_API_KEY must be exported or set in .env' >&2
-  exit 2
+# Resolve the env-file the same way the Lisp side does (HARNESS_ENV_FILE wins,
+# else the repo-root .env), so this guard and the loader never disagree.
+env_file=${HARNESS_ENV_FILE:-"$repo_root/.env"}
+
+# Credential guard depends on backend. Codex uses subscription OAuth in
+# CODEX_HOME (no OPENROUTER_API_KEY). Fake backend skips provider credentials.
+if [ "$fake_backend" = false ]; then
+  if [ "$backend" = openrouter ]; then
+    if [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$env_file" ]; then
+      printf '%s\n' 'bin/chat: OPENROUTER_API_KEY must be exported or set in .env' >&2
+      exit 2
+    fi
+  fi
+fi
+
+# Map a host --codex-home path to a container-visible CODEX_HOME under the
+# /workspace bind mount when the path lives in the repo; leave already-container
+# paths (/workspace/...) and foreign absolute paths unchanged.
+container_codex_home=
+if [ "$codex_home_supplied" = true ]; then
+  case "$codex_home" in
+    /workspace/*)
+      container_codex_home=$codex_home
+      ;;
+    /*)
+      case "$codex_home" in
+        "$repo_root"|"$repo_root"/*)
+          rel=${codex_home#"$repo_root"}
+          rel=${rel#/}
+          if [ -n "$rel" ]; then
+            container_codex_home="/workspace/$rel"
+          else
+            container_codex_home="/workspace"
+          fi
+          ;;
+        *)
+          # Absolute path outside the repo: forward as-is (caller must ensure
+          # visibility inside the container, e.g. via an existing mount).
+          container_codex_home=$codex_home
+          ;;
+      esac
+      ;;
+    *)
+      # Relative to repo root -> /workspace/<rel>
+      rel=${codex_home#./}
+      container_codex_home="/workspace/$rel"
+      ;;
+  esac
 fi
 
 # SBCL's default dynamic space is 1 GiB. A long chat retains every tool result in
@@ -147,6 +244,11 @@ if [ "$continue_session" = true ]; then
 fi
 export HARNESS_CHAT_MAX_ROUNDS=$max_rounds
 export HARNESS_CHAT_SESSION_ID=$session_id
+# CLI --backend wins over any ambient HARNESS_BACKEND by exporting it here.
+export HARNESS_BACKEND=$backend
+if [ -n "$container_codex_home" ]; then
+  export CODEX_HOME=$container_codex_home
+fi
 if [ "$supervised" = true ]; then
   export HARNESS_CHAT_STREAM_MODE=supervised
 fi
@@ -171,6 +273,8 @@ if [ "$mode" = interactive ]; then
     --env HARNESS_CHAT_RESUME \
     --env HARNESS_CHAT_STREAM_MODE \
     --env HARNESS_CHAT_FAKE_BACKEND \
+    --env HARNESS_BACKEND \
+    --env CODEX_HOME \
     --dynamic-space-size "$dynamic_space_mb" \
     --noinform \
     --load scripts/chat.lisp
@@ -185,6 +289,8 @@ exec "$container_runner" --writable-workspace \
   --env HARNESS_CHAT_SESSION_ID \
   --env HARNESS_CHAT_RESUME \
   --env HARNESS_CHAT_FAKE_BACKEND \
+  --env HARNESS_BACKEND \
+  --env CODEX_HOME \
   --dynamic-space-size "$dynamic_space_mb" \
   --noinform \
   --load scripts/chat.lisp

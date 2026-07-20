@@ -56,14 +56,14 @@ esac
 
 stdin_output=$(printf 'stdin prompt' | OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat")
 case "$stdin_output" in
-  *'mode=one-shot prompt=stdin prompt model=openai/gpt-4.1-mini max-rounds=60'*) ;;
-  *) printf 'Test failed: stdin prompt did not reach the driver\n' >&2; exit 1 ;;
+  *'mode=one-shot prompt=stdin prompt model=openai/gpt-4.1-mini max-rounds=60'*'backend=openrouter'*) ;;
+  *) printf 'Test failed: stdin prompt did not reach the driver with default backend\n' >&2; exit 1 ;;
 esac
 
 help_output=$($repo_root/bin/chat --help)
 case "$help_output" in
-  *'Usage: bin/chat'*'--session-id ID'*'OpenRouter model ID'*) ;;
-  *) printf 'Test failed: help output missing session-ID or model-ID guidance\n' >&2; exit 1 ;;
+  *'Usage: bin/chat'*'--backend BACKEND'*'--codex-home PATH'*'--session-id ID'*) ;;
+  *) printf 'Test failed: help output missing session-ID/backend/codex-home guidance\n' >&2; exit 1 ;;
 esac
 
 expect_error 2 'must be a positive integer' \
@@ -74,8 +74,11 @@ expect_error 2 'prompt must not be empty' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --prompt ''
 expect_error 2 'session ID must not be empty' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --session-id '' --prompt x
+# Point HARNESS_ENV_FILE at a path that does not exist so this exercises the
+# "no key exported AND no env file" branch regardless of any local repo .env.
 expect_error 2 'OPENROUTER_API_KEY must be exported' \
-  env -u OPENROUTER_API_KEY HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --prompt x
+  env -u OPENROUTER_API_KEY HARNESS_CHAT_RUNNER="$runner" \
+      HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file "$repo_root/bin/chat" --prompt x
 expect_error 17 'driver failure propagates' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" HARNESS_FAKE_CONTAINER_STATUS=17 "$repo_root/bin/chat" --prompt x
 
@@ -94,6 +97,53 @@ esac
 case "$help_output" in
   *'--continue'*) ;;
   *) printf 'Test failed: help output missing --continue guidance\n' >&2; exit 1 ;;
+esac
+
+
+# --backend codex + --codex-home map into HARNESS_BACKEND / CODEX_HOME for the container.
+expect_success 'backend=codex codex-home=/workspace/.codex-home' \
+  "$repo_root/bin/chat" --backend codex --codex-home .codex-home --model gpt-5-codex --prompt 'codex path'
+expect_success 'backend=codex codex-home=/workspace/.codex-home' \
+  "$repo_root/bin/chat" --backend CODEX --codex-home ./.codex-home --model gpt-5-codex --prompt 'case'
+# Absolute repo-relative path maps under /workspace.
+repo_abs_home="$repo_root/.codex-home"
+expect_success 'backend=codex codex-home=/workspace/.codex-home' \
+  "$repo_root/bin/chat" --backend codex --codex-home "$repo_abs_home" --model gpt-5-codex --prompt 'abs'
+# Already-container path is preserved.
+expect_success 'codex-home=/workspace/custom-codex' \
+  "$repo_root/bin/chat" --backend codex --codex-home /workspace/custom-codex --model gpt-5-codex --prompt 'ws'
+
+# Codex path does not require OPENROUTER_API_KEY when no .env is visible.
+expect_success 'backend=codex' \
+  env -u OPENROUTER_API_KEY HARNESS_CHAT_RUNNER="$runner" \
+      HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file \
+      "$repo_root/bin/chat" --backend codex --codex-home .codex-home --model gpt-5-codex --prompt 'no-or-key'
+
+expect_error 2 'not supported' \
+  env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+      "$repo_root/bin/chat" --backend openai --prompt x
+expect_error 2 'must be openrouter or codex' \
+  env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+      "$repo_root/bin/chat" --backend nope --prompt x
+expect_error 2 'only valid with --backend codex' \
+  env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+      "$repo_root/bin/chat" --codex-home .codex-home --prompt x
+expect_error 2 '--backend requires a value' \
+  env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+      "$repo_root/bin/chat" --backend
+expect_error 2 '--codex-home requires a path' \
+  env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+      "$repo_root/bin/chat" --backend codex --codex-home
+expect_error 2 'must not be empty' \
+  env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+      "$repo_root/bin/chat" --backend codex --codex-home '' --prompt x
+
+# CLI --backend is forwarded via --env HARNESS_BACKEND.
+backend_args=$(OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
+  "$repo_root/bin/chat" --backend codex --codex-home .codex-home --model gpt-5-codex --prompt 'env forward')
+case "$backend_args" in
+  *'--env HARNESS_BACKEND'*'--env CODEX_HOME'*) ;;
+  *) printf 'Test failed: container invocation missing HARNESS_BACKEND/CODEX_HOME env forwards: %s\n' "$backend_args" >&2; exit 1 ;;
 esac
 
 printf 'Chat CLI argument and exit-path tests passed.\n'

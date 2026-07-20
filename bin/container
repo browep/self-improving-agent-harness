@@ -49,18 +49,28 @@ done
 # Building is explicit and repeatable; source is never copied into the image.
 docker build --tag "$image" "$repo_root"
 
+# Forward host-exported runtime config without printing values. Host exports
+# override .env for the same names. OPENAI_API_KEY is intentionally NOT
+# forwarded: OpenAI Platform API-key billing is out of scope; subscription
+# usage goes through HARNESS_BACKEND=codex + Codex-managed OAuth (CODEX_HOME).
+host_key_options=
+if [ "${OPENROUTER_API_KEY+x}" = x ]; then
+  host_key_options="$host_key_options --env OPENROUTER_API_KEY"
+fi
+if [ "${HARNESS_BACKEND+x}" = x ]; then
+  host_key_options="$host_key_options --env HARNESS_BACKEND"
+fi
+if [ "${CODEX_HOME+x}" = x ]; then
+  host_key_options="$host_key_options --env CODEX_HOME"
+fi
+if [ "${HARNESS_LIVE_CODEX_SMOKE+x}" = x ]; then
+  host_key_options="$host_key_options --env HARNESS_LIVE_CODEX_SMOKE"
+fi
+
 # The --no-network switch is understood only by bin/container and becomes
 # Docker's --network=none option before the image name.
 if [ -f "$repo_root/.env" ]; then
-  if [ "${OPENROUTER_API_KEY+x}" = x ]; then
-    exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} --rm --init \
-      --env-file "$repo_root/.env" --env OPENROUTER_API_KEY \
-      --volume "$workspace_mount" \
-      --volume self-improving-agent-harness-cache:/cache \
-      --volume self-improving-agent-harness-logs:/logs \
-      --workdir /workspace "$image" "$@"
-  fi
-  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} --rm --init \
+  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} --rm --init \
     --env-file "$repo_root/.env" \
     --volume "$workspace_mount" \
     --volume self-improving-agent-harness-cache:/cache \
@@ -68,15 +78,7 @@ if [ -f "$repo_root/.env" ]; then
     --workdir /workspace "$image" "$@"
 fi
 
-if [ "${OPENROUTER_API_KEY+x}" = x ]; then
-  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} --rm --init --env OPENROUTER_API_KEY \
-    --volume "$workspace_mount" \
-    --volume self-improving-agent-harness-cache:/cache \
-    --volume self-improving-agent-harness-logs:/logs \
-    --workdir /workspace "$image" "$@"
-fi
-
-exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} --rm --init \
+exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} --rm --init \
   --volume "$workspace_mount" \
   --volume self-improving-agent-harness-cache:/cache \
   --volume self-improving-agent-harness-logs:/logs \
