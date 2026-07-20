@@ -13,7 +13,9 @@
              :content "Call echo with message tool-loop-ok, then provide the required final reply."))
           :options
           '(:temperature 0.0
-            :max-tokens 64
+            ;; Leave room for provider reasoning, the tool decision, and the
+            ;; final text after the continuation request.
+            :max-tokens 512
             :tool-choice "auto"
             :tools ((:type "function"
                      :function (:name "echo"

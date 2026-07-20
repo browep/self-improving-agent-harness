@@ -7,7 +7,11 @@
           :model "syn:large:text"
           :messages '((:role "system" :content "Reply exactly with integration-ok.")
                       (:role "user" :content "Return the required phrase."))
-          :options '(:temperature 0.0 :max-tokens 16)))
+          ;; GLM's reasoning tokens count against the OpenAI-compatible output
+          ;; budget. Leave enough room for both reasoning and the fixed final
+          ;; phrase; a 16-token cap can produce a successful but empty content
+          ;; field.
+          :options '(:temperature 0.0 :max-tokens 256)))
        (backend
          (self-improving-agent-harness:make-synthetic-backend
           :api-key (uiop:getenv "SYNTHETIC_API_KEY")))
