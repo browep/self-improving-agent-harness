@@ -4,6 +4,18 @@
   (getf message :role))
 
 (defun run-chat-session-tests ()
+  (let ((system-prompt +chat-system-prompt+))
+    (dolist (required-text
+             '("evidence-driven improvement"
+               "allow-all"
+               "Do not treat your own final response as acceptance evidence."
+               "Do not weaken, replace, or silently redefine"
+               "Docker-only"
+               "reload_harness"
+               "external supervisor owns isolation, budgets, independent evidence, and promotion decisions"
+               "Never expose credentials"))
+      (ensure-true (search required-text system-prompt)
+                   (format nil "system prompt preserves worker contract: ~A" required-text))))
   (let* ((first-response (make-completion-response :text "first answer" :model "test/model"))
          (second-response (make-completion-response :text "second answer" :model "test/model"))
          (backend (make-instance 'scripted-backend
