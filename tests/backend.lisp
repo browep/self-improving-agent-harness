@@ -32,6 +32,7 @@
                    "harness entry point does not expose API-key material"))
       (run-codex-jsonrpc-tests)
       (run-codex-app-server-tests)
+      (run-codex-backend-tests)
       (run-openrouter-adapter-tests)
       (run-tool-loop-tests)
       (run-chat-session-tests)

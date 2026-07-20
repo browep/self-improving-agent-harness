@@ -88,6 +88,13 @@
    #:*codex-app-server-command*
    #:*codex-authenticated-mode*
    #:*codex-safe-account-keys*
+   ;; Codex app-server backend adapter (issue #18, phase 4)
+   #:codex-app-server-backend
+   #:make-codex-app-server-backend
+   #:codex-backend-turn-method
+   #:codex-backend-connection-factory
+   #:*codex-turn-method*
+   #:*codex-default-model*
    #:openrouter-backend
    #:make-openrouter-backend
    #:openrouter-backend-base-url
