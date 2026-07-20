@@ -101,6 +101,20 @@
                                           (cdr (assoc "meta" redacted :test #'string=))
                                           :test #'string=)))
                  "nested alist non-secret key survives"))
+  ;; deviceCode (the pollable device secret) is redacted, but userCode (the
+  ;; human-facing verification code) and verificationUri are NOT secrets.
+  (let* ((login (list (cons "verificationUri" "https://example/device")
+                      (cons "userCode" "ABCD-1234")
+                      (cons "deviceCode" "poll-secret-xyz")))
+         (redacted (self-improving-agent-harness:codex-redact login))
+         (marker self-improving-agent-harness:*codex-redaction-marker*))
+    (ensure-true (equal marker (cdr (assoc "deviceCode" redacted :test #'string=)))
+                 "deviceCode is redacted as a secret")
+    (ensure-true (equal "ABCD-1234" (cdr (assoc "userCode" redacted :test #'string=)))
+                 "userCode (human verification code) is preserved")
+    (ensure-true (equal "https://example/device"
+                        (cdr (assoc "verificationUri" redacted :test #'string=)))
+                 "verificationUri is preserved"))
   ;; String leaves still get scrubbed for token-shaped substrings.
   (ensure-true (not (search "sk-or-abcdef123456"
                             (self-improving-agent-harness:codex-redact

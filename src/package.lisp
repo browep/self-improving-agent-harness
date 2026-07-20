@@ -68,6 +68,26 @@
    #:codex-secret-key-p
    #:*codex-secret-key-substrings*
    #:*codex-redaction-marker*
+   ;; Codex app-server supervisor + JSON-RPC client (issue #18, phase 2)
+   #:codex-app-server-error
+   #:codex-app-server-error-reason
+   #:codex-connection
+   #:make-codex-connection-from-streams
+   #:codex-request
+   #:codex-initialize
+   #:codex-read-account
+   #:codex-account-safe-state
+   #:codex-account-auth-mode
+   #:codex-require-chatgpt-auth
+   #:codex-login-start
+   #:codex-wait-for-login
+   #:codex-login-completed-p
+   #:spawn-codex-app-server
+   #:close-codex-connection
+   #:with-codex-app-server
+   #:*codex-app-server-command*
+   #:*codex-authenticated-mode*
+   #:*codex-safe-account-keys*
    #:openrouter-backend
    #:make-openrouter-backend
    #:openrouter-backend-base-url

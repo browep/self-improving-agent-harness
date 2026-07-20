@@ -114,6 +114,7 @@ Signals an error on a malformed frame (missing/invalid Content-Length)."
 (defparameter *codex-secret-key-substrings*
   '("token" "secret" "password" "apikey" "api_key" "api-key"
     "authorization" "auth_code" "authcode" "code_verifier" "codeverifier"
+    "devicecode" "device_code"
     "id_token" "access" "refresh" "client_secret" "bearer" "credential")
   "Lowercased substrings that mark a JSON key as holding a secret. Matching keys
 are replaced with a redaction marker regardless of value. Conservative by design:
