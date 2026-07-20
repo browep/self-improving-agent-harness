@@ -124,7 +124,10 @@ fi
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 container_runner=${HARNESS_CHAT_RUNNER:-"$repo_root/bin/container"}
-if [ "$fake_backend" = false ] && [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$repo_root/.env" ]; then
+# Resolve the env-file the same way the Lisp side does (HARNESS_ENV_FILE wins,
+# else the repo-root .env), so this guard and the loader never disagree.
+env_file=${HARNESS_ENV_FILE:-"$repo_root/.env"}
+if [ "$fake_backend" = false ] && [ -z "${OPENROUTER_API_KEY:-}" ] && [ ! -f "$env_file" ]; then
   printf '%s\n' 'bin/chat: OPENROUTER_API_KEY must be exported or set in .env' >&2
   exit 2
 fi

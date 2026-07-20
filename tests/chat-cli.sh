@@ -74,8 +74,11 @@ expect_error 2 'prompt must not be empty' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --prompt ''
 expect_error 2 'session ID must not be empty' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --session-id '' --prompt x
+# Point HARNESS_ENV_FILE at a path that does not exist so this exercises the
+# "no key exported AND no env file" branch regardless of any local repo .env.
 expect_error 2 'OPENROUTER_API_KEY must be exported' \
-  env -u OPENROUTER_API_KEY HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --prompt x
+  env -u OPENROUTER_API_KEY HARNESS_CHAT_RUNNER="$runner" \
+      HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file "$repo_root/bin/chat" --prompt x
 expect_error 17 'driver failure propagates' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" HARNESS_FAKE_CONTAINER_STATUS=17 "$repo_root/bin/chat" --prompt x
 
