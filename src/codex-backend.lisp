@@ -151,3 +151,91 @@ redacted, non-secret metadata is logged; no OAuth token is read or surfaced."
                 :provider-request-id (codex-jsonrpc-field result "id")
                 :usage usage))))
       (close-codex-connection connection))))
+
+;;; ---------------------------------------------------------------------------
+;;; Post-OAuth verification entry point (issue #18, Phase 5).
+;;;
+;;; VERIFY-CODEX-CHATGPT-AUTH is the acceptance-proof routine invoked by
+;;; bin/verify-codex-chatgpt-auth AFTER a human completes Codex-managed ChatGPT
+;;; login. It is explicitly opt-in and is never called from make test. It emits
+;;; and returns ONLY sanitized evidence; OAuth credentials, device codes,
+;;; prompts, raw provider events, and tool output are never surfaced.
+;;; ---------------------------------------------------------------------------
+
+(defparameter *codex-verify-prompt*
+  "Reply with the single word: verified."
+  "Bounded, tool-free prompt for the minimal live proof turn. Its content is
+never emitted or persisted; only the turn outcome/model is recorded.")
+
+(defun codex-verification-evidence (&key status auth-mode model plan outcome reason
+                                      codex-version)
+  "Assemble a sanitized evidence plist. Every value here is non-secret."
+  (list :status status
+        :codex-version (or codex-version "unavailable")
+        :auth-mode (or auth-mode "unavailable")
+        :plan (or plan "unavailable")
+        :model (or model "unavailable")
+        :turn-outcome (or outcome "unavailable")
+        ;; Cost/token stay unavailable unless Codex reports them authoritatively;
+        ;; the verify turn does not attempt to aggregate them.
+        :input-tokens "unavailable"
+        :output-tokens "unavailable"
+        :cost-usd "unavailable"
+        :reason (and reason (scrub-interaction-log-text (princ-to-string reason)))))
+
+(defun verify-codex-chatgpt-auth (&key (connection-factory #'spawn-codex-app-server)
+                                    (turn-method *codex-turn-method*)
+                                    codex-version)
+  "Prove the ChatGPT/Codex subscription session is usable, returning evidence.
+
+Returns two values: a sanitized evidence plist and a boolean success flag.
+Success requires BOTH (a) account/read reporting authMode == chatgpt and (b) one
+bounded, tool-free turn completing. apiKey/missing/other auth, or a failed turn,
+is a failure with a redacted, actionable reason. There is no OPENAI_API_KEY
+fallback. Never emits or persists OAuth material."
+  (let ((connection (funcall connection-factory)))
+    (unwind-protect
+         (handler-case
+             (progn
+               (codex-initialize connection)
+               (multiple-value-bind (safe-state) (codex-read-account connection)
+                 (let ((auth-mode (codex-require-chatgpt-auth safe-state))
+                       (plan (or (gethash "planType" safe-state)
+                                 (gethash "plan" safe-state))))
+                   ;; A completed login notification alone is insufficient; run a
+                   ;; real turn to prove the session is usable.
+                   (let* ((request (make-completion-request
+                                    :messages (list (list :role "user"
+                                                          :content *codex-verify-prompt*))))
+                          (result (codex-request connection turn-method
+                                                 (codex-turn-params request)))
+                          (text (codex-turn-text result))
+                          (model (or (codex-jsonrpc-field result "model")
+                                     *codex-default-model*)))
+                     (values
+                      (codex-verification-evidence
+                       :status "ok" :auth-mode auth-mode :model model :plan plan
+                       :codex-version codex-version
+                       :outcome (if (plusp (length text)) "completed" "empty"))
+                      t)))))
+           (codex-app-server-error (condition)
+             (values
+              (codex-verification-evidence
+               :status "failed" :codex-version codex-version
+               :reason (codex-app-server-error-reason condition))
+              nil))
+           (error (condition)
+             (values
+              (codex-verification-evidence
+               :status "failed" :codex-version codex-version
+               :reason (format nil "runtime/protocol failure: ~A" (type-of condition)))
+              nil)))
+      (close-codex-connection connection))))
+
+(defun format-codex-verification-evidence (evidence stream)
+  "Print sanitized EVIDENCE as stable key=value lines to STREAM."
+  (loop for (key value) on evidence by #'cddr
+        do (format stream "CODEX_VERIFY ~A=~A~%"
+                   (string-downcase (symbol-name key))
+                   (if value value "unavailable")))
+  (finish-output stream))

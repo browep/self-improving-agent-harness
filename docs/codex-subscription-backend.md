@@ -61,3 +61,28 @@ existing harness-controlled worktree/evaluator boundary remains authoritative.
 The exact JSON-RPC method surface (`account/read`, `account/login/start`,
 `account/login/completed`, minimal read-only turn) is doc-derived and MUST be
 validated against a pinned real Codex binary before adapter behavior is trusted.
+
+## Verification CLI (acceptance proof)
+
+After a human completes Codex-managed ChatGPT login, run the opt-in, billable
+proof:
+
+```
+HARNESS_LIVE_CODEX_SMOKE=1 bin/verify-codex-chatgpt-auth
+```
+
+- Starts the official local `codex app-server`, reads the non-secret account
+  state, and requires `authMode: chatgpt`. Missing auth, `apiKey` auth, or any
+  other mode is a failure; there is no `OPENAI_API_KEY` fallback.
+- Runs one bounded, tool-free turn through the same session. A completed login
+  notification alone is insufficient; the turn proves the session is usable.
+- Exits `0` only when both the verified auth mode and the turn succeed; non-zero
+  with a redacted, actionable reason otherwise; `77` when opt-in is unset.
+- Prints and persists only sanitized evidence (Codex version, timestamp, auth
+  mode, non-secret plan/model, turn outcome). OAuth credentials, device codes,
+  prompts, and raw provider events are never emitted or persisted. Cost/token
+  fields stay `unavailable` unless Codex reports them authoritatively.
+- Deliberately excluded from `make test`; exposed as `make verify-codex-chatgpt-auth`.
+
+Deterministic coverage: `tests/codex-verify-cli.sh` (opt-in gating, Docker-free)
+and `tests/codex-backend.lisp` (success/failure/redaction of the verify routine).

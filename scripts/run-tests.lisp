@@ -3,3 +3,4 @@
 (asdf:test-system :self-improving-agent-harness)
 (uiop:run-program '("/bin/sh" "tests/chat-cli.sh") :output t :error-output t)
 (uiop:run-program '("/bin/sh" "tests/chat-interrupt.sh") :output t :error-output t)
+(uiop:run-program '("/bin/sh" "tests/codex-verify-cli.sh") :output t :error-output t)

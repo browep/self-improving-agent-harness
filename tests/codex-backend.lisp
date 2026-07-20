@@ -101,10 +101,54 @@ account/read chatgpt (id 2), and a turn result (id 3)."
     (ensure-true (not (search "should-not-survive" flat))
                  "backend RAW is redacted; no token value survives")))
 
+(defun cb-verify (server-frames &optional (turn-method "thread/runTurn"))
+  "Run verify-codex-chatgpt-auth against a fake connection seeded with
+SERVER-FRAMES, returning (values evidence success)."
+  (self-improving-agent-harness:verify-codex-chatgpt-auth
+   :turn-method turn-method
+   :codex-version "codex-test-0.0"
+   :connection-factory
+   (lambda ()
+     (multiple-value-bind (conn out) (cas-connection server-frames)
+       (declare (ignore out))
+       conn))))
+
+(defun run-codex-verify-tests ()
+  ;; Success: chatgpt auth + a completed turn -> ok, success t.
+  (multiple-value-bind (evidence success) (cb-verify (cb-authed-frames))
+    (ensure-true (eq t success) "verify succeeds with chatgpt auth and a completed turn")
+    (ensure-true (equal "ok" (getf evidence :status)) "evidence status is ok on success")
+    (ensure-true (equal "chatgpt" (getf evidence :auth-mode)) "evidence records chatgpt auth mode")
+    (ensure-true (equal "completed" (getf evidence :turn-outcome)) "evidence records a completed turn")
+    (ensure-true (equal "codex-test-0.0" (getf evidence :codex-version)) "evidence records the codex version")
+    ;; Accounting stays unavailable in the verify path.
+    (ensure-true (equal "unavailable" (getf evidence :cost-usd)) "verify cost stays unavailable")
+    (ensure-true (equal "unavailable" (getf evidence :input-tokens)) "verify input tokens stay unavailable"))
+  ;; Failure: apiKey auth -> failed, success nil, redacted reason, no fallback.
+  (let ((frames (list (cas-frame (cas-response 1 (cas-obj "ok" t)))
+                      (cas-frame (cas-response 2 (cas-obj "authMode" "apiKey"))))))
+    (multiple-value-bind (evidence success) (cb-verify frames)
+      (ensure-true (null success) "verify fails on apiKey auth")
+      (ensure-true (equal "failed" (getf evidence :status)) "evidence status is failed on rejection")
+      (ensure-true (search "OPENAI_API_KEY" (getf evidence :reason))
+                   "verify failure reason forbids the OPENAI_API_KEY fallback")))
+  ;; Evidence must never carry token material: seed a leak in the account read.
+  (let ((frames (list (cas-frame (cas-response 1 (cas-obj "ok" t)))
+                      (cas-frame (cas-response 2 (cas-obj "authMode" "chatgpt"
+                                                          "access_token" "sk-verify-leak-xyz")))
+                      (cas-frame (cas-response 3 (cas-obj "text" "verified"))))))
+    (multiple-value-bind (evidence success) (cb-verify frames)
+      (declare (ignore success))
+      (let ((flat (with-output-to-string (s)
+                    (self-improving-agent-harness:format-codex-verification-evidence evidence s))))
+        (ensure-true (not (search "sk-verify-leak-xyz" flat))
+                     "formatted verify evidence contains no token material")))))
+
 (defun run-codex-backend-tests ()
   (run-codex-backend-success-tests)
   (run-codex-backend-authoritative-usage-tests)
   (run-codex-backend-auth-rejection-tests)
   (run-codex-backend-redaction-tests)
+  (run-codex-verify-tests)
   (format t "Codex app-server backend adapter tests passed.~%")
   t)

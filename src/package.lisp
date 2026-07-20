@@ -95,6 +95,11 @@
    #:codex-backend-connection-factory
    #:*codex-turn-method*
    #:*codex-default-model*
+   ;; Codex post-OAuth verification (issue #18, phase 5)
+   #:verify-codex-chatgpt-auth
+   #:codex-verification-evidence
+   #:format-codex-verification-evidence
+   #:*codex-verify-prompt*
    #:openrouter-backend
    #:make-openrouter-backend
    #:openrouter-backend-base-url
