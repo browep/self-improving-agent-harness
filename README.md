@@ -114,6 +114,9 @@ and retention rationale. Retention is replayed solely from persisted evaluator
 verdicts: the scripted regression is rejected, without candidate self-assessment
 or self-promotion. See [how the self-modifying harness works](docs/self-modifying-harness.md)
 for the current modification mechanisms, evaluation independence, and limits.
+[What Common Lisp unlocks for a self-modifying LLM harness](docs/common-lisp-harness-roadmap.md)
+describes the form-level mutation, live-reload, and workflow-induction research
+roadmap built on those boundaries.
 
 ## Docker-first runtime
 
