@@ -9,6 +9,7 @@ stdin_option=
 forward_env_options=
 workspace_mount="$repo_root:/workspace:ro"
 publish_option=
+publish_scope=loopback
 
 # Only repository-provided wrappers may disable networking. This is intentionally
 # a narrow switch instead of accepting arbitrary Docker options from the caller.
@@ -32,9 +33,10 @@ while [ "$#" -gt 0 ]; do
       workspace_mount="$repo_root:/workspace"
       shift
       ;;
-    --publish-loopback)
-      [ "$#" -ge 2 ] || { printf '%s\n' 'bin/container: --publish-loopback requires HOST_PORT:CONTAINER_PORT' >&2; exit 2; }
-      [ -z "${publish_option:-}" ] || { printf '%s\n' 'bin/container: --publish-loopback may be supplied only once' >&2; exit 2; }
+    --publish-loopback|--publish-any)
+      [ "$#" -ge 2 ] || { printf '%s\n' "$1 requires HOST_PORT:CONTAINER_PORT" >&2; exit 2; }
+      [ -z "${publish_option:-}" ] || { printf '%s\n' 'bin/container: a publish option may be supplied only once' >&2; exit 2; }
+      publish_scope=$1
       mapping=$2
       host_port=${mapping%%:*}
       container_port=${mapping#*:}
@@ -48,7 +50,11 @@ while [ "$#" -gt 0 ]; do
       [ "$host_port" -ge 1 ] && [ "$host_port" -le 65535 ] \
         && [ "$container_port" -ge 1 ] && [ "$container_port" -le 65535 ] \
         || { printf '%s\n' 'bin/container: ports must be in 1..65535' >&2; exit 2; }
-      publish_option="--publish 127.0.0.1:$host_port:$container_port"
+      if [ "$publish_scope" = --publish-any ]; then
+        publish_option="--publish 0.0.0.0:$host_port:$container_port"
+      else
+        publish_option="--publish 127.0.0.1:$host_port:$container_port"
+      fi
       shift 2
       ;;
     --env)
