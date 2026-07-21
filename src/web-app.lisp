@@ -56,9 +56,9 @@
                                    :content (format nil "<div class=\"role\">~A</div><div>~A</div>"
                                                     role (web-html-escape text)))
                   (format nil "message-~D" (getf event :sequence)))))
-      (web-style item (format nil "align-self:~A;max-width:78%;padding:12px 14px;border-radius:12px;line-height:1.4;white-space:pre-wrap;~A"
-                              (if userp "flex-end" "flex-start")
-                              (if userp "background:#2563eb;color:#fff" "background:#f1f5f9;color:#0f172a")))
+      (web-style item (format nil "box-sizing:border-box;width:100%;padding:12px 14px;border-radius:6px;line-height:1.4;white-space:pre-wrap;border-left:3px solid ~A;~A"
+                              (if userp "#3b82f6" "#94a3b8")
+                              (if userp "background:#eff6ff;color:#0f172a" "background:#f8fafc;color:#334155")))
       item)))
 
 (defun web-on-new-window (body)
