@@ -15,8 +15,9 @@ send EOF to leave.
 Interactive slash commands: /reload reloads harness sources in-process; /max-rounds [N] shows or sets the live tool-loop limit.
 Piped stdin remains a one-shot prompt and is never interpreted as a transcript.
 
--c, --continue resumes the most recent session: the latest
-agent-logs/*.history.json snapshot is reloaded as the starting conversation
+-c, --continue resumes the most recent session by default. Combine it with
+--session-id ID to resume that specific durable `agent-logs/ID.history.json`
+session; the snapshot is reloaded as the starting conversation
 (including tool calls and results), and the resumed turns append to that
 session's log files. The snapshot's model and max-rounds are adopted unless you
 also pass --model/--max-rounds. Errors (no snapshot) fall back to a fresh session.

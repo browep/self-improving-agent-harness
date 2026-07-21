@@ -345,24 +345,29 @@ The basename is $SESSION-ID.history.json; strip the trailing .history.json."
                (string= suffix name :start2 (- (length name) (length suffix))))
       (subseq name 0 (- (length name) (length suffix))))))
 
-(defun resolve-resume-plan (log-directory)
+(defun resolve-resume-plan (log-directory &optional preferred-session-id)
   "Return a resume plan for the most recent snapshot under LOG-DIRECTORY, or NIL.
 
 The plan is a plist (:session-id :history :model :max-rounds :path). Returns NIL
 when no snapshot exists or it has no usable messages, so the caller can start a
 fresh session instead."
-  (let ((snapshot (most-recent-session-snapshot log-directory)))
+  (let ((snapshot (if preferred-session-id
+                      (find preferred-session-id (list-session-snapshots log-directory)
+                            :key (lambda (descriptor) (getf descriptor :session-id)) :test #'string=)
+                      (most-recent-session-snapshot log-directory))))
     (when snapshot
-      (let ((history (read-session-history-snapshot snapshot)))
+      (let ((path (if (pathnamep snapshot) snapshot (getf snapshot :path)))
+            (history (if (pathnamep snapshot) nil (getf snapshot :history))))
+        (setf history (or history (read-session-history-snapshot path)))
         (when (and history (listp history))
           (multiple-value-bind (session-id model max-rounds)
-              (read-session-snapshot-metadata snapshot)
+              (read-session-snapshot-metadata path)
             (list :session-id (or session-id
-                                  (snapshot-session-id-from-path snapshot))
+                                  (snapshot-session-id-from-path path))
                   :history history
                   :model model
                   :max-rounds max-rounds
-                  :path snapshot)))))))
+                  :path path)))))))
 
 (defparameter *workspace-env-file*
   "/workspace/.env"
@@ -446,7 +451,8 @@ not an error. Returns the list of variable names set."
          (preferred-session-id (uiop:getenv "HARNESS_CHAT_SESSION_ID"))
          (resume-requested (let ((v (uiop:getenv "HARNESS_CHAT_RESUME")))
                              (and v (plusp (length v)))))
-         (resume-plan (when resume-requested (resolve-resume-plan log-directory)))
+         (resume-plan (when resume-requested
+                        (resolve-resume-plan log-directory preferred-session-id)))
          (resume-history (getf resume-plan :history))
          ;; A resumed session adopts the prior snapshot's session id (so its
          ;; JSONL/text/history files continue), model, and round limit -- those
