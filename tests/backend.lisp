@@ -40,6 +40,7 @@
       (run-chat-session-tests)
       (run-env-file-tests)
       (run-shell-tool-tests)
+      (run-web-search-tests)
       (run-reload-tests)
       (run-logging-tests)
       (run-resume-tests)

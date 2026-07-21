@@ -36,6 +36,14 @@
    #:*run-shell-timeout-kill-after-seconds*
    #:report-run-shell-timing
    #:run-run-shell-after-hooks
+   ;; Web search tool (web_search / Tavily)
+   #:web-search-tool
+   #:tavily-search
+   #:tavily-api-key
+   #:tavily-api-key-configured-p
+   #:*tavily-search-url*
+   #:*tavily-default-search-depth*
+   #:*tavily-default-max-results*
    #:reload-harness-tool
    #:chat-session
    #:make-chat-session

@@ -53,6 +53,23 @@ designator path.")
                                                     :description "Optional wall-clock timeout in seconds. Defaults to 60. On expiry the command is terminated and a timeout message is returned."))
                              :required ("command"))))
     (:type "function"
+     :function (:name "web_search"
+                :description "Search the web in real time via the Tavily Search API and return clean, LLM-ready results (titles, URLs, scores, content snippets). Requires TAVILY_API_KEY in the environment. Use for current information, news, documentation, or any web context. ALWAYS invoke this through the native tools/tool_calls API only."
+                :parameters (:type "object"
+                             :properties (:query (:type "string"
+                                                   :description "The search query to execute.")
+                                          :search_depth (:type "string"
+                                                         :description "Controls latency vs relevance: 'basic' (1 credit, default), 'advanced' (2 credits, higher relevance), 'fast', or 'ultra-fast'.")
+                                          :max_results (:type "integer"
+                                                        :description "Maximum number of search results to return (1-20). Defaults to 5.")
+                                          :topic (:type "string"
+                                                  :description "Search category: 'general' (default), 'news', or 'finance'.")
+                                          :include_answer (:type "boolean"
+                                                            :description "Include an LLM-generated answer to the query. Defaults to false.")
+                                          :time_range (:type "string"
+                                                       :description "Filter by recency: 'day', 'week', 'month', or 'year'."))
+                             :required ("query"))))
+    (:type "function"
      :function (:name "reload_harness"
                 :description "Reload self-improving-agent-harness sources into this same Lisp image after editing project Lisp files. Returns a structured status line (status=ok|note|warning|error files=N warnings=N notes=N ...) plus any non-benign compiler diagnostics. Does not reset chat history or max-rounds. ALWAYS invoke through the native tools/tool_calls API only — never XML/text tool markup in assistant content."
                 :parameters (:type "object")))
@@ -85,6 +102,7 @@ Symbols are intentional: OPENROUTER-TOOL-HANDLER / FUNCALL re-resolve them on
 each tool call, so redefining SHELL-TOOL or RELOAD-TOOL via reload_harness is
 visible to the already-running interactive session."
   '(("run_shell" . shell-tool)
+    ("web_search" . web-search-tool)
     ("reload_harness" . reload-tool)
     ("run_subagent" . subagent-tool)))
 
