@@ -190,7 +190,7 @@
                           (make-web-session :backend (web-selected-backend backend-name) :model model-name
                                             :run-session-id *web-run-session-id*
                                             :log-directory *web-log-directory*
-                                            :handlers `(("echo" . ,(lambda (arguments) (format nil "echo: ~A" (gethash "message" arguments))))))))
+                                            :handlers 'chat-handlers)))
            (render-session-list)
            (render-active-session))))
       (clog:set-on-click
