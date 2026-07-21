@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+set -eu
+
+port=17881
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --port) [ "$#" -ge 2 ] || { echo 'bin/web: --port requires a value' >&2; exit 2; }; port=$2; shift 2 ;;
+    --fake-scenario) [ "$#" -ge 2 ] || { echo 'bin/web: --fake-scenario requires a value' >&2; exit 2; }; [ "$2" = tool-success ] || { echo 'bin/web: only tool-success is currently supported' >&2; exit 2; }; shift 2 ;;
+    *) echo "bin/web: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+case "$port" in ''|*[!0-9]*) echo 'bin/web: --port must be a decimal port' >&2; exit 2;; esac
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo 'bin/web: --port must be in 1..65535' >&2; exit 2; }
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export HARNESS_WEB_PORT=18080
+exec "$repo_root/bin/container" --publish-loopback "$port:18080" --env HARNESS_WEB_PORT --noinform --load scripts/web.lisp

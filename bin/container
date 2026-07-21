@@ -8,6 +8,7 @@ network_option=
 stdin_option=
 forward_env_options=
 workspace_mount="$repo_root:/workspace:ro"
+publish_option=
 
 # Only repository-provided wrappers may disable networking. This is intentionally
 # a narrow switch instead of accepting arbitrary Docker options from the caller.
@@ -30,6 +31,25 @@ while [ "$#" -gt 0 ]; do
     --writable-workspace)
       workspace_mount="$repo_root:/workspace"
       shift
+      ;;
+    --publish-loopback)
+      [ "$#" -ge 2 ] || { printf '%s\n' 'bin/container: --publish-loopback requires HOST_PORT:CONTAINER_PORT' >&2; exit 2; }
+      [ -z "${publish_option:-}" ] || { printf '%s\n' 'bin/container: --publish-loopback may be supplied only once' >&2; exit 2; }
+      mapping=$2
+      host_port=${mapping%%:*}
+      container_port=${mapping#*:}
+      case "$mapping" in
+        *:* ) ;;
+        * ) printf '%s\n' 'bin/container: port mapping must be HOST_PORT:CONTAINER_PORT' >&2; exit 2 ;;
+      esac
+      case "$host_port:$container_port" in
+        *[!0-9:]*|:*|*:|*:*:* ) printf '%s\n' 'bin/container: ports must be decimal integers' >&2; exit 2 ;;
+      esac
+      [ "$host_port" -ge 1 ] && [ "$host_port" -le 65535 ] \
+        && [ "$container_port" -ge 1 ] && [ "$container_port" -le 65535 ] \
+        || { printf '%s\n' 'bin/container: ports must be in 1..65535' >&2; exit 2; }
+      publish_option="--publish 127.0.0.1:$host_port:$container_port"
+      shift 2
       ;;
     --env)
       [ "$#" -ge 2 ] || { printf '%s\n' 'bin/container: --env requires a variable name' >&2; exit 2; }
@@ -70,7 +90,7 @@ fi
 # The --no-network switch is understood only by bin/container and becomes
 # Docker's --network=none option before the image name.
 if [ -f "$repo_root/.env" ]; then
-  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} --rm --init \
+  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} ${publish_option:-} --rm --init \
     --env-file "$repo_root/.env" \
     --volume "$workspace_mount" \
     --volume self-improving-agent-harness-cache:/cache \
@@ -78,7 +98,7 @@ if [ -f "$repo_root/.env" ]; then
     --workdir /workspace "$image" "$@"
 fi
 
-exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} --rm --init \
+exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} ${publish_option:-} --rm --init \
   --volume "$workspace_mount" \
   --volume self-improving-agent-harness-cache:/cache \
   --volume self-improving-agent-harness-logs:/logs \

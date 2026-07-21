@@ -3,8 +3,19 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes \
        sbcl python3 git ca-certificates gh nodejs npm curl \
-       cl-drakma cl-yason cl-alexandria cl-trivial-gray-streams \
+       cl-drakma cl-yason cl-alexandria cl-trivial-gray-streams cl-quicklisp \
     && rm -rf /var/lib/apt/lists/*
+
+# CLOG's current dependency graph requires newer libraries than Debian Bookworm
+# packages provide.  Keep the Quicklisp world isolated so ASDF cannot combine
+# those versions with Debian's older source registry at runtime.
+RUN CL_SOURCE_REGISTRY='(:source-registry :ignore-inherited-configuration)' \
+      sbcl --non-interactive \
+        --load /usr/share/common-lisp/source/quicklisp/quicklisp.lisp \
+        --eval '(quicklisp-quickstart:install :path "/opt/quicklisp")' \
+        --eval '(ql:quickload (list :clog :drakma :yason))'
+ENV CL_SOURCE_REGISTRY='(:source-registry :ignore-inherited-configuration)'
+RUN printf '%s\n' '(load "/opt/quicklisp/setup.lisp")' > /root/.sbclrc
 
 # Route GitHub SSH remotes over HTTPS and use gh as the git credential helper,
 # so a GITHUB_TOKEN in the runtime env is sufficient for git push/pull (no SSH key).

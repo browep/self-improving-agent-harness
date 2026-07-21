@@ -1,6 +1,6 @@
 # Docker-first Common Lisp workflow. No host Lisp runtime is required.
 
-.PHONY: image test run experiment-example baseline report configuration-comparison source-mutation live-smoke live-tool-smoke live-synthetic-smoke live-synthetic-tool-smoke live-chat-supervisor-tool-smoke verify-codex-chatgpt-auth chat repl clean
+.PHONY: image test run experiment-example baseline report configuration-comparison source-mutation live-smoke live-tool-smoke live-synthetic-smoke live-synthetic-tool-smoke live-chat-supervisor-tool-smoke verify-codex-chatgpt-auth chat web repl clean
 
 image:
 	docker build --tag self-improving-agent-harness:dev .
@@ -50,6 +50,9 @@ verify-codex-chatgpt-auth:
 
 chat:
 	./bin/chat
+
+web:
+	./bin/web
 
 repl:
 	./bin/container --noinform
