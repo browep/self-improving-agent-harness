@@ -153,7 +153,9 @@
                      (clog:inner-html session-id) (if session (web-session-id session) "")
                      (clog:inner-html durable-session-id) (if session (web-session-durable-session-id session) "")
                      (clog:disabledp send) (null session)
-                     (clog:value composer) "")
+                     (clog:value composer) ""
+                     (clog:value backend-input) (if session (backend-name (chat-session-backend (web-session-chat-session session))) "synthetic")
+                     (clog:value model-input) (if session (chat-session-model (web-session-chat-session session)) "syn:large:text"))
                (when session
                  (dolist (event (web-session-events session))
                    (web-render-chat-message chat-log event))
