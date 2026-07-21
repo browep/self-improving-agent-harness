@@ -44,6 +44,14 @@
    #:*tavily-search-url*
    #:*tavily-default-search-depth*
    #:*tavily-default-max-results*
+   ;; Model metadata (context-length lookup for context-window display)
+   #:model-context-length
+   #:ensure-model-metadata
+   #:fetch-model-metadata
+   #:model-metadata-fetched-p
+   #:context-fill-percentage
+   #:reset-model-metadata-cache
+   #:*model-metadata-cache*
    #:reload-harness-tool
    #:chat-session
    #:make-chat-session
@@ -166,6 +174,7 @@
    ;; Subagent tool (run_subagent)
    #:subagent-tool
    #:maybe-deliver-subagent-results
+   #:has-pending-subagent-deliveries-p
    #:*subagent-default-max-rounds*
    #:*subagent-default-timeout-seconds*
    #:*pending-subagent-deliveries*

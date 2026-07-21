@@ -239,6 +239,15 @@ forever."
     (prog1 *pending-subagent-deliveries*
       (setf *pending-subagent-deliveries* nil))))
 
+(defun has-pending-subagent-deliveries-p ()
+  "Return T when at least one completed subagent result is awaiting delivery.
+
+Thread-safe. Used by the interactive loop to decide whether to poll stdin with
+a timeout (so deliveries can be drained while waiting for human input) or block
+indefinitely (no subagents outstanding)."
+  (sb-thread:with-recursive-lock (*subagent-mutex*)
+    (not (null *pending-subagent-deliveries*))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; The run_subagent tool handler
 ;;; ---------------------------------------------------------------------------
@@ -347,16 +356,21 @@ result will be delivered when complete]"
 Each completed subagent result is injected as a separate harness-initiated turn
 via RUN-SYNTHETIC-FOLLOWUP-TURN so the super-agent gets a fresh inference round
 to react to each one. Deliveries are drained one at a time. If the queue is
-empty, this is a no-op."
-  (loop
-    for delivery = (take-next-subagent-delivery)
-    while delivery
-    do (let* ((status-label
-               (if (eq (subagent-delivery-status delivery) :completed)
-                   "completed" "failed"))
-              (content
-               (format nil "[subagent ~A ~A] ~A"
-                       (subagent-delivery-subagent-id delivery)
-                       status-label
-                       (subagent-delivery-result delivery))))
-         (run-synthetic-followup-turn session content))))
+empty, this is a no-op.
+
+Returns the number of deliveries made (0 when the queue was empty)."
+  (let ((count 0))
+    (loop
+      for delivery = (take-next-subagent-delivery)
+      while delivery
+      do (let* ((status-label
+                 (if (eq (subagent-delivery-status delivery) :completed)
+                     "completed" "failed"))
+                (content
+                 (format nil "[subagent ~A ~A] ~A"
+                         (subagent-delivery-subagent-id delivery)
+                         status-label
+                         (subagent-delivery-result delivery))))
+           (run-synthetic-followup-turn session content)
+           (incf count)))
+    count))

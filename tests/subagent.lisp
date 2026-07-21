@@ -111,4 +111,24 @@
     (error (condition)
       (ensure-true (search "Unknown subagent provider" (princ-to-string condition))
                    "unknown provider signals a clear error")))
+
+  ;; 11. has-pending-subagent-deliveries-p: nil when queue is empty.
+  (self-improving-agent-harness::clear-subagent-deliveries)
+  (ensure-true (null (self-improving-agent-harness::has-pending-subagent-deliveries-p))
+               "has-pending-subagent-deliveries-p is nil when queue is empty")
+
+  ;; 12. has-pending-subagent-deliveries-p: true when queue has items.
+  (let ((delivery (self-improving-agent-harness::make-subagent-delivery
+                   :subagent-id "pending-test"
+                   :status :completed
+                   :result "pending result"
+                   :provider "synthetic"
+                   :model "test/model"
+                   :duration-seconds 1.0)))
+    (self-improving-agent-harness::enqueue-subagent-delivery delivery)
+    (ensure-true (self-improving-agent-harness::has-pending-subagent-deliveries-p)
+                 "has-pending-subagent-deliveries-p is true when queue has items"))
+  (self-improving-agent-harness::clear-subagent-deliveries)
+  (ensure-true (null (self-improving-agent-harness::has-pending-subagent-deliveries-p))
+               "has-pending-subagent-deliveries-p is nil after clearing")
   t)

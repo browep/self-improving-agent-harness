@@ -121,6 +121,37 @@
       (ensure-true (not (search "model=" out))
                    "final-response outcome no longer embeds the model id")))
 
+  ;; Token/context suffix: appended when accounting is supplied, and the
+  ;; context-length ceiling is known. The model id must never appear (no
+  ;; "model=" substring), only the numeric ceiling and fill percentage.
+  (self-improving-agent-harness::reset-model-metadata-cache)
+  (let ((backend (self-improving-agent-harness::make-openrouter-backend :api-key "k")))
+    (self-improving-agent-harness::store-model-metadata
+     "openrouter"
+     (yason:parse
+      "{\"data\":[{\"id\":\"test/model\",\"context_length\":200000,\"top_provider\":{\"context_length\":200000}}]}"))
+    (let ((stderr (make-string-output-stream)))
+      (let ((*error-output* stderr))
+        (self-improving-agent-harness:write-final-response-outcome
+         :rounds 2 :duration-seconds 0.5d0
+         :backend backend
+         :model "test/model"
+         :accounting (list :aggregate
+                           (list :input-tokens 1500 :input-tokens-state "actual"
+                                 :output-tokens 500 :output-tokens-state "actual"
+                                 :total-tokens 2000 :total-tokens-state "actual"
+                                 :cost-usd 0 :cost-usd-state "actual"))))
+      (let ((out (get-output-stream-string stderr)))
+        (ensure-true (search "<<< DONE rounds=2 duration_seconds=0.500" out)
+                     "outcome still reports rounds and duration with suffix")
+        (ensure-true (search "tokens=1500/500/2000" out)
+                     "outcome reports input/output/total tokens")
+        (ensure-true (search "context=2000/200000 (1%)" out)
+                     "outcome reports context fill with percentage")
+        (ensure-true (not (search "model=" out))
+                   "outcome suffix never embeds the model id")))
+    (self-improving-agent-harness::reset-model-metadata-cache))
+
   ;; CLI sessions store options/handlers as symbols so later turns re-resolve.
   (let ((session (self-improving-agent-harness::make-cli-chat-session nil "test/model" 9)))
     (ensure-equal 'self-improving-agent-harness:chat-options

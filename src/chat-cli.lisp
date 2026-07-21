@@ -22,6 +22,13 @@
 (defparameter *pending-chat-prompt-close* nil
   "When true, the next interactive input should reprint +CHAT-PROMPT-SEPARATOR+.")
 
+(defparameter *subagent-poll-interval-seconds* 0.5
+  "How long to wait between subagent-delivery checks while polling stdin.
+
+When subagent results are pending, the interactive loop polls stdin with this
+interval instead of blocking indefinitely, so completed subagent results are
+delivered without waiting for a human line.")
+
 (defun required-environment (name)
   (let ((value (uiop:getenv name)))
     (unless (and value (plusp (length value)))
@@ -216,11 +223,42 @@ re-entered after reload_harness)."
   (setf *pending-chat-prompt-close* t)
   (values))
 
+(defvar *interactive-session* nil
+  "Dynamically bound to the current interactive session inside RUN-INTERACTIVE-LOOP.
+
+Lets READ-CHAT-INPUT-LINE drain pending subagent deliveries while polling stdin
+without threading the session through every call.")
+
+(defun maybe-deliver-subagent-results-from-stdin-wait (session)
+  "Drain pending subagent deliveries while the interactive loop waits for stdin.
+
+Called by READ-CHAT-INPUT-LINE between stdin polls when subagent results are
+pending. Each delivery runs as a synthetic follow-up turn so the super-agent
+reacts to it immediately, without waiting for a human line."
+  (when (has-pending-subagent-deliveries-p)
+    (maybe-deliver-subagent-results session)))
+
 (defun read-chat-input-line ()
-  "Read one interactive line, then print the closing separator when armed."
-  (let ((input (read-line *standard-input* nil :eof)))
-    (maybe-write-chat-prompt-closing)
-    input))
+  "Read one interactive line, then print the closing separator when armed.
+
+When no subagent deliveries are pending, blocks on READ-LINE as before. When
+subagent deliveries are pending, polls stdin with LISTEN so the caller can drain
+the delivery queue between polls without waiting for a human line. Returns the
+line, or :EOF."
+  (if (has-pending-subagent-deliveries-p)
+      (loop
+        ;; Poll: return immediately when input is available.
+        when (listen *standard-input*)
+          do (let ((input (read-line *standard-input* nil :eof)))
+               (maybe-write-chat-prompt-closing)
+               (return input))
+        ;; No input yet; drain any deliveries that arrived, then sleep briefly.
+        do (maybe-deliver-subagent-results-from-stdin-wait *interactive-session*)
+           (sleep *subagent-poll-interval-seconds*))
+      ;; No subagents outstanding: block as before.
+      (let ((input (read-line *standard-input* nil :eof)))
+        (maybe-write-chat-prompt-closing)
+        input)))
 
 (defun write-interactive-session-banner (model max-rounds)
   "Print the interactive startup banner to stderr.
@@ -271,12 +309,15 @@ here so the model can continue without another human line."
 (defun run-interactive-loop (session)
   "Read/dispatch interactive lines until exit.
 
-This is the long-lived loop frame. Keep it thin: only call helpers by name."
-  (loop
-    (write-chat-prompt)
-    (let ((input (read-chat-input-line)))
-      (when (eq (process-interactive-input session input) :exit)
-        (return))))
+This is the long-lived loop frame. Keep it thin: only call helpers by name.
+Binds *INTERACTIVE-SESSION* so READ-CHAT-INPUT-LINE can drain subagent
+deliveries while polling stdin."
+  (let ((*interactive-session* session))
+    (loop
+      (write-chat-prompt)
+      (let ((input (read-chat-input-line)))
+        (when (eq (process-interactive-input session input) :exit)
+          (return)))))
   session)
 
 (defun run-interactive (backend model max-rounds &key history)

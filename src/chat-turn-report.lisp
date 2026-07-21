@@ -22,15 +22,62 @@ including the final no-tool-call response. NIL/empty means zero rounds."
       (length provider-responses)
       0))
 
-(defun write-final-response-outcome (&key rounds duration-seconds)
+(defun turn-accounting-tokens (accounting)
+  "Return (values input-tokens output-tokens total-tokens) from ACCOUNTING.
+
+ACCOUNTING is the plist stored in CHAT-SESSION-LAST-ACCOUNTING. Token values
+are integers when the provider supplied them, or :unavailable otherwise."
+  (let* ((aggregate (getf accounting :aggregate))
+         (input (getf aggregate :input-tokens))
+         (output (getf aggregate :output-tokens))
+         (total (getf aggregate :total-tokens)))
+    (values input output total)))
+
+(defun format-context-fill-suffix (backend model accounting)
+  "Return a string suffix for the DONE line describing token usage and context fill.
+
+Returns \"\" when no token information is available at all. The suffix never
+contains the literal \"model=\" (a reload-test invariant), so the model id is not
+embedded; only the context-length ceiling and fill percentage appear.
+
+Format when context length is known:
+  tokens=in/out/total context=used/max (P%)
+Format when only tokens are known (no context ceiling):
+  tokens=in/out/total
+Tokens that are :unavailable are shown as \"?\"."
+  (multiple-value-bind (input output total)
+      (turn-accounting-tokens accounting)
+    (let ((has-tokens (or (integerp input) (integerp output) (integerp total))))
+      (if (not has-tokens)
+          ""
+          (let* ((ctx-len (model-context-length backend model))
+                 (in-str (if (integerp input) (princ-to-string input) "?"))
+                 (out-str (if (integerp output) (princ-to-string output) "?"))
+                 (tot-str (if (integerp total) (princ-to-string total) "?"))
+                 (token-part (format nil "tokens=~A/~A/~A" in-str out-str tot-str)))
+            (if (integerp ctx-len)
+                (let* ((used (or total input 0))
+                       (pct (context-fill-percentage used ctx-len)))
+                  (format nil "~A context=~D/~D~@[ (~D%)~]"
+                          token-part used ctx-len pct))
+                token-part))))))
+
+(defun write-final-response-outcome (&key rounds duration-seconds
+                                       (backend nil) (model nil) (accounting nil))
   "Print the post-turn outcome line to stderr for human interactive/one-shot modes.
 
 Format:
-  <<< DONE rounds=N duration_seconds=S.SSS"
-  (format *error-output*
-          "~%<<< DONE rounds=~D duration_seconds=~,3F~%"
-          rounds duration-seconds)
-  (finish-output *error-output*))
+  <<< DONE rounds=N duration_seconds=S.SSS [tokens=in/out/total context=used/max (P%)]
+
+The token/context suffix is appended only when accounting data is present and
+the model id is never embedded (no \"model=\" substring), preserving the
+reload-test invariant."
+  (let ((suffix (format-context-fill-suffix backend model accounting)))
+    (format *error-output*
+            "~%<<< DONE rounds=~D duration_seconds=~,3F~@[ ~A~]~%"
+            rounds duration-seconds
+            (and (plusp (length suffix)) suffix))
+    (finish-output *error-output*)))
 
 (defun report-completed-chat-turn (session start-internal-time response
                                    &key (leading-newline t))
@@ -48,8 +95,8 @@ present (e.g. length) to make truncated empty finals diagnosable without JSONL."
          (raw-text (completion-response-text response))
          (finish (completion-response-finish-reason response))
          (blank-p (or (null raw-text)
-                      (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
-                                                  raw-text)))))
+                     (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                                 raw-text)))))
          (text
            (if blank-p
                (format nil
@@ -64,7 +111,17 @@ present (e.g. length) to make truncated empty finals diagnosable without JSONL."
     (if leading-newline
         (format t "~%~A~%" text)
         (format t "~A~%" text))
-    (write-final-response-outcome :rounds rounds :duration-seconds duration)
+    ;; Use the session (request) model for the context-length lookup, not the
+    ;; response model: providers often resolve aliases (e.g. syn:large:text ->
+    ;; zai-org/GLM-5.2) so the response model id may not appear in the /models
+    ;; listing that keys the metadata cache. Fall back to the response model.
+    (write-final-response-outcome
+     :rounds rounds
+     :duration-seconds duration
+     :backend (chat-session-backend session)
+     :model (or (chat-session-model session)
+                (completion-response-model response))
+     :accounting (chat-session-last-accounting session))
     response))
 
 (defun run-synthetic-followup-turn (session content)

@@ -41,6 +41,7 @@
       (run-env-file-tests)
       (run-shell-tool-tests)
       (run-web-search-tests)
+      (run-model-metadata-tests)
       (run-reload-tests)
       (run-logging-tests)
       (run-resume-tests)
