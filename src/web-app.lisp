@@ -8,6 +8,8 @@
   "The existing HARNESS_CHAT_SESSION_ID that owns this CLOG server process.")
 (defvar *web-fake-scenario* nil
   "Optional deterministic server scenario, set once by RUN-WEB-SERVER.")
+(defvar *web-log-directory* "/workspace/agent-logs"
+  "Durable shared CLI/CLOG session directory.")
 
 (defvar *web-sessions* (make-hash-table :test #'equal))
 (defvar *web-session-order* '())
@@ -18,11 +20,32 @@
   (pushnew (web-session-id session) *web-session-order* :test #'string=)
   session)
 
-(defun web-known-sessions ()
+(defun web-load-durable-session (descriptor)
+  "Materialize a durable CLI or web snapshot as a selectable browser session."
+  (let ((durable-id (getf descriptor :session-id)))
+    (or (find durable-id (web-known-sessions :refresh nil)
+              :key #'web-session-durable-session-id :test #'string=)
+        (web-register-session
+         (make-web-session
+          :backend (web-selected-backend (or (getf descriptor :backend) "synthetic"))
+          :model (or (getf descriptor :model) "syn:large:text")
+          :max-rounds (or (getf descriptor :max-rounds) 60)
+          :history (getf descriptor :history)
+          :durable-session-id durable-id
+          :run-session-id *web-run-session-id*
+          :log-directory *web-log-directory*
+          :handlers `(("echo" . ,(lambda (arguments)
+                                    (format nil "echo: ~A" (gethash "message" arguments))))))))))
+
+(defun web-known-sessions (&key (refresh t))
+  "Return durable sessions newest-first, including CLI-created snapshots."
+  (when refresh
+    (dolist (descriptor (or (list-session-snapshots *web-log-directory*) '()))
+      (web-load-durable-session descriptor)))
   (remove nil (mapcar (lambda (id) (gethash id *web-sessions*)) *web-session-order*)))
 
 (defun web-session-summary (session)
-  (format nil "~A · ~D turn~:P" (subseq (web-session-id session) 0 8)
+  (format nil "~A · ~D turn~:P" (subseq (web-session-durable-session-id session) 0 8)
           (web-session-turn-number session)))
 
 (defclass web-fake-backend (backend)
@@ -106,6 +129,8 @@
          (state (web-mark (clog:create-div controls :content "not started") "session-state"))
          (browser-label (clog:create-div controls :content "Browser session ID:"))
          (session-id (web-mark (clog:create-div controls :content "") "session-id"))
+         (durable-label (clog:create-div controls :content "Durable session ID:"))
+         (durable-session-id (web-mark (clog:create-div controls :content "") "durable-session-id"))
          (workspace (web-style (clog:create-div root :class "workspace") "flex:1;min-height:0;display:flex;gap:14px"))
          (sidebar (web-style (clog:create-div workspace :class "session-sidebar") "width:240px;flex:0 0 240px;overflow-y:auto;padding:10px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc"))
          (sidebar-title (clog:create-div sidebar :content "Previous sessions"))
@@ -117,7 +142,7 @@
          (send (web-mark (web-style (clog:create-button composer-row :content "Send") "min-width:92px;height:54px;font:inherit") "send-turn"))
          (session nil)
          (rendered-sequence 0))
-    (declare (ignore heading run-label run-id browser-label sidebar-title backend-label model-label))
+    (declare (ignore heading run-label run-id browser-label durable-label sidebar-title backend-label model-label))
     (setf (clog:value backend-input) "synthetic"
           (clog:value model-input) "syn:large:text")
     (setf (clog:attribute composer "placeholder") "Enter a prompt")
@@ -126,6 +151,7 @@
                (setf (clog:inner-html chat-log) ""
                      (clog:inner-html state) (if session "ready" "not started")
                      (clog:inner-html session-id) (if session (web-session-id session) "")
+                     (clog:inner-html durable-session-id) (if session (web-session-durable-session-id session) "")
                      (clog:disabledp send) (null session)
                      (clog:value composer) "")
                (when session
@@ -153,6 +179,7 @@
            (setf session (web-register-session
                           (make-web-session :backend (web-selected-backend backend-name) :model model-name
                                             :run-session-id *web-run-session-id*
+                                            :log-directory *web-log-directory*
                                             :handlers `(("echo" . ,(lambda (arguments) (format nil "echo: ~A" (gethash "message" arguments))))))))
            (render-session-list)
            (render-active-session))))
@@ -179,10 +206,12 @@
            (render-active-session))))
     (clog:run body))))
 
-(defun run-web-server (&key (host "0.0.0.0") (port 18080) run-session-id fake-scenario)
+(defun run-web-server (&key (host "0.0.0.0") (port 18080) run-session-id fake-scenario
+                            (log-directory "/workspace/agent-logs"))
   "Start the local CLOG app. Docker controls host exposure separately."
   (setf *web-run-session-id* run-session-id
-        *web-fake-scenario* fake-scenario)
+        *web-fake-scenario* fake-scenario
+        *web-log-directory* log-directory)
   (clog:initialize #'web-on-new-window :host host :port port)
   (format t "WEB_READY url=http://127.0.0.1:~D/ run_session_id=~A~%"
           port (or run-session-id "none"))

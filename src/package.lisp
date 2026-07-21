@@ -21,6 +21,7 @@
    #:read-session-history-snapshot
    #:read-session-snapshot-metadata
    #:most-recent-session-snapshot
+   #:list-session-snapshots
    #:log-interaction
    #:log-http-text
    #:*interaction-text-log-path*

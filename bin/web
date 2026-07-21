@@ -20,4 +20,4 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 export HARNESS_WEB_PORT=18080
 export HARNESS_CHAT_SESSION_ID=$session_id
 export HARNESS_WEB_FAKE_SCENARIO=$fake_scenario
-exec "$repo_root/bin/container" "$publish_mode" "$port:18080" --env HARNESS_WEB_PORT --env HARNESS_CHAT_SESSION_ID --env HARNESS_WEB_FAKE_SCENARIO --noinform --load scripts/web.lisp
+exec "$repo_root/bin/container" --writable-workspace "$publish_mode" "$port:18080" --env HARNESS_WEB_PORT --env HARNESS_CHAT_SESSION_ID --env HARNESS_WEB_FAKE_SCENARIO --noinform --load scripts/web.lisp
