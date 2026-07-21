@@ -458,9 +458,11 @@ not an error. Returns the list of variable names set."
          (session-id (or (getf resume-plan :session-id) preferred-session-id))
          (model (or (getf resume-plan :model) model))
          (max-rounds (or (getf resume-plan :max-rounds) max-rounds))
-         (backend-override (and resume-plan
-                                (not (string= (or (uiop:getenv "HARNESS_CHAT_BACKEND_EXPLICIT") "") "true"))
-                                (getf resume-plan :backend)))
+         (backend-override (let ((saved (getf resume-plan :backend)))
+                             (and resume-plan
+                                  (not (string= (or (uiop:getenv "HARNESS_CHAT_BACKEND_EXPLICIT") "") "true"))
+                                  (member saved '("openrouter" "synthetic" "codex") :test #'string=)
+                                  saved)))
          (backend (make-chat-backend :backend backend-override)))
     ;; One session JSONL file per process: agent-logs/$ISO-TIMESTAMP.jsonl under
     ;; the workspace bind-mount so hosts can inspect logs without the Docker
