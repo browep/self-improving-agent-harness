@@ -22,10 +22,13 @@ The default list reports wall-clock duration and exit status on *ERROR-OUTPUT*."
 
 (defun report-run-shell-timing (&key command exit-status duration-seconds output
                                   timeout-seconds timed-out)
-  "Default run_shell hook: print command preview, exit status, and elapsed seconds."
+  "Default run_shell after-hook. The standard TOOL_DONE console marker is now
+emitted centrally by OPENROUTER-TOOL-RESULT-MESSAGE, so this hook only records
+the run_shell-specific exit-status detail to stderr for operators who want the
+process outcome without reading JSONL."
   (declare (ignore output timeout-seconds timed-out))
   (format *error-output*
-          "TOOL_DONE name=run_shell exit_status=~D duration_seconds=~,3F command=~S~%"
+          "RUN_SHELL_EXIT exit_status=~D duration_seconds=~,3F command=~S~%"
           exit-status duration-seconds (truncate-for-display command 80))
   (finish-output *error-output*))
 
@@ -117,11 +120,6 @@ run with timing, exit status, and timeout metadata."
     (log-interaction :info "tool-call" :tool "run_shell"
                      :command command
                      :timeout-seconds timeout-seconds)
-    (format *error-output*
-            "TOOL_CALL name=run_shell timeout_seconds=~A command=~S~%"
-            (format-run-shell-timeout-seconds timeout-seconds)
-            (truncate-for-display command 80))
-    (finish-output *error-output*)
     (let ((start (get-internal-real-time)))
       (multiple-value-bind (output exit-status timed-out)
           (run-shell-command command timeout-seconds)

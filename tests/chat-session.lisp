@@ -13,7 +13,10 @@
                "Docker-only"
                "reload_harness"
                "external supervisor owns isolation, budgets, independent evidence, and promotion decisions"
-               "Never expose credentials"))
+               "Never expose credentials"
+               "native tools/tool_calls"
+               "Never put tool invocations in assistant text"
+               "chunked commands"))
       (ensure-true (search required-text system-prompt)
                    (format nil "system prompt preserves worker contract: ~A" required-text))))
   (let* ((first-response (make-completion-response :text "first answer" :model "test/model"))
@@ -99,5 +102,17 @@
     (note-chat-session-failure session)
     (ensure-true (chat-session-failed-turn-p session)
                  "a failed interactive turn is recorded without exposing error detail"))
+  (let ((options (self-improving-agent-harness:chat-options)))
+    (ensure-equal 0.2 (getf options :temperature)
+                  "chat-options keeps a low default temperature")
+    (ensure-true (integerp (getf options :max-tokens))
+                 "chat-options supplies max-tokens")
+    (ensure-true (>= (getf options :max-tokens) 8192)
+                 "chat-options default max-tokens is at least 8192")
+    (ensure-equal "auto" (getf options :tool-choice)
+                  "chat-options sets tool_choice auto explicitly")
+    (ensure-true (search "native tools/tool_calls"
+                         (getf (getf (first (getf options :tools)) :function) :description))
+                 "run_shell tool description requires native tool_calls"))
   (format t "Chat-session tests passed.~%")
   t)

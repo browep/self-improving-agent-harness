@@ -270,7 +270,8 @@ the whole chat). RUN-SCRUB-TERMINATION-REGRESSION in tests/logging.lisp guards i
   "True when KEY is a textual traffic field that may hold user/model content."
   (member key '(:content :message :command :output :arguments :text
                 :request-json :response-text :tool-result :followup-content
-                :body-snippet :error-message :file :request-snippet)
+                :body-snippet :error-message :file :request-snippet
+                :prompt :result)
           :test #'eq))
 
 (defun safe-interaction-log-fields (fields)
@@ -286,7 +287,8 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
           ((and (member key '(:model :mode :tool :reason :command-name :source
                               :initiator :status :finish-reason :role
                               :provider-request-id :tool-call-id
-                              :url :url-path :attempt-id :phase :error-class)
+                              :url :url-path :attempt-id :phase :error-class
+                              :subagent-id :provider)
                         :test #'eq)
                 (or (safe-interaction-label-p value)
                     (and (stringp value) (plusp (length value)) (<= (length value) 200))))
@@ -298,7 +300,8 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
                               :loaded-file-count :total-file-count
                               :request-bytes :body-bytes
                               :request-chars :body-chars
-                              :connection-timeout-seconds)
+                              :connection-timeout-seconds
+                              :length-retry :length-retry-limit :length-retries)
                         :test #'eq)
                 (integerp value))
            (list key value))
@@ -329,9 +332,11 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
     ((member event '("tool-call" "tool-completed" "tool-failed"
                      "provider-request" "provider-response"
                      "provider-request-failed" "provider-http-error"
+                     "provider-empty-length-retry" "provider-empty-length-final"
                      "http-request-started" "http-request-completed"
                      "reload-started" "reload-progress" "reload-completed"
-                     "reload-failed")
+                     "reload-failed"
+                     "subagent-started" "subagent-completed")
              :test #'string=)
      "tool")
     (t

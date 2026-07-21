@@ -31,3 +31,6 @@ bin/__pycache__/
 # Codex ChatGPT/Codex OAuth home (issue #18). Contains auth.json with OAuth
 # tokens; must never be committed, imaged, or logged.
 .codex-home/
+
+# Temporary planning/design documents
+docs-tmp/

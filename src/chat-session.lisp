@@ -11,6 +11,12 @@ Preserve experimental integrity. Distinguish making a candidate change from prov
 
 Use tools deliberately. Use run_shell for repository inspection, edits, tests, and commands needed to complete the request. Read tool output and correct failures rather than guessing. Use reload_harness only after editing project Lisp sources when updated definitions must affect this live chat process. Never expose credentials or intentionally search for them in environment, files, logs, or command output.
 
+Tool-calling protocol (mandatory):
+- Invoke tools only through the provider native tools/tool_calls (function-calling) API.
+- Never put tool invocations in assistant text as XML or pseudo-tags such as <tool_call>, <arg_key>, <arg_value>, </tool_call>, or similar markup. Those are not executed as structured calls.
+- Keep each run_shell command bounded. For large file creation or edits, write in multiple smaller chunked commands (e.g. create file, then append sections) instead of one giant heredoc that can hit output token limits mid-call.
+- If a tool call fails or is reported truncated, retry with a smaller payload via native tool_calls rather than repeating XML markup.
+
 When finished, concisely state what you found or changed, the verification commands and actual outcomes, and remaining uncertainty, failed checks, or work left to an independent evaluator. Return the final response without tool calls when no more tool use is needed.")
 
 (defstruct (chat-session
@@ -134,33 +140,38 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                        :tool-names (mapcar #'princ-to-string tool-names)
                        :content content)
       (handler-case
-          (multiple-value-bind (response continuation-history provider-responses)
-              (run-tool-loop (chat-session-backend session)
-                             request
-                             handlers
-                             :max-rounds (chat-session-max-rounds session))
-            (setf (chat-session-history session)
-                  (append continuation-history
-                          (list (list :role "assistant"
-                                      :content (completion-response-text response)))))
-            (setf (chat-session-last-provider-responses session) provider-responses
-                  (chat-session-last-accounting session)
-                  (provider-accounting-summary (chat-session-backend session)
-                                               provider-responses))
-            ;; Lossless resume snapshot (bin/chat -c). Best-effort and guarded so
-            ;; a missing snapshot path or a mid-turn reload never aborts the turn.
-            (when (fboundp 'write-session-history-snapshot)
-              (ignore-errors
-                (write-session-history-snapshot
-                 (chat-session-history session)
-                 :model (chat-session-model session)
-                 :max-rounds (chat-session-max-rounds session))))
-            (log-interaction :info "turn-completed"
-                             :initiator *interaction-turn-initiator*
-                             :model (completion-response-model response)
-                             :content (completion-response-text response)
-                             :round (length provider-responses))
-            response)
+          ;; Bind parent context for the run_subagent tool: the subagent
+          ;; handler reads these to default provider/model and to log
+          ;; subagent-completed events back to the parent's JSONL.
+          (let ((*subagent-parent-backend* (chat-session-backend session))
+                (*subagent-parent-model* (chat-session-model session)))
+            (multiple-value-bind (response continuation-history provider-responses)
+                (run-tool-loop (chat-session-backend session)
+                               request
+                               handlers
+                               :max-rounds (chat-session-max-rounds session))
+              (setf (chat-session-history session)
+                    (append continuation-history
+                            (list (list :role "assistant"
+                                        :content (completion-response-text response)))))
+              (setf (chat-session-last-provider-responses session) provider-responses
+                    (chat-session-last-accounting session)
+                    (provider-accounting-summary (chat-session-backend session)
+                                                 provider-responses))
+              ;; Lossless resume snapshot (bin/chat -c). Best-effort and guarded so
+              ;; a missing snapshot path or a mid-turn reload never aborts the turn.
+              (when (fboundp 'write-session-history-snapshot)
+                (ignore-errors
+                  (write-session-history-snapshot
+                   (chat-session-history session)
+                   :model (chat-session-model session)
+                   :max-rounds (chat-session-max-rounds session))))
+              (log-interaction :info "turn-completed"
+                               :initiator *interaction-turn-initiator*
+                               :model (completion-response-model response)
+                               :content (completion-response-text response)
+                               :round (length provider-responses))
+              response))
         (error (condition)
           (log-interaction :error "turn-failed"
                            :initiator *interaction-turn-initiator*

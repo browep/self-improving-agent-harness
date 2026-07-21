@@ -5,6 +5,12 @@
    #:backend-name
    #:complete
    #:run-tool-loop
+   #:emit-tool-call-marker
+   #:emit-tool-done-marker
+   #:truncate-for-tool-display
+   #:maybe-recover-text-embedded-tool-calls
+   #:parse-text-embedded-tool-calls
+   #:*chat-max-tokens*
    #:*openrouter-request-timeout-seconds*
    #:*openrouter-connection-timeout-seconds*
    #:*openrouter-slow-request-warn-seconds*
@@ -148,4 +154,17 @@
    #:take-next-synthetic-followup
    #:clear-synthetic-followups
    #:maybe-run-synthetic-followup-turns
-   #:run-synthetic-followup-turn))
+   #:run-synthetic-followup-turn
+   ;; Subagent tool (run_subagent)
+   #:subagent-tool
+   #:maybe-deliver-subagent-results
+   #:*subagent-default-max-rounds*
+   #:*subagent-default-timeout-seconds*
+   #:*pending-subagent-deliveries*
+   #:clear-subagent-deliveries
+   #:take-next-subagent-delivery
+   #:subagent-delivery
+   #:subagent-delivery-subagent-id
+   #:subagent-delivery-status
+   #:subagent-delivery-result
+   #:make-subagent-delivery))

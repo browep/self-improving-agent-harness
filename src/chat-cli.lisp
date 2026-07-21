@@ -34,24 +34,48 @@
 (defun reload-tool (arguments)
   (reload-harness-tool arguments))
 
+(defparameter *chat-max-tokens* 8192
+  "Default max_tokens for interactive chat completions.
+
+Raised above the historical 4096 default so long tool-using turns (especially
+file writes) are less likely to end with finish_reason=length mid-command.
+Bound or set at runtime; CHAT-OPTIONS re-reads it each turn via the symbol
+designator path.")
+
 (defun chat-tool-definitions ()
   '((:type "function"
      :function (:name "run_shell"
-                :description "Run a shell command in the harness container and return combined stdout/stderr. Optional timeout is wall-clock seconds (default 60); timed-out commands are terminated and reported."
+                :description "Run a shell command in the harness container and return combined stdout/stderr. Optional timeout is wall-clock seconds (default 60); timed-out commands are terminated and reported. ALWAYS invoke this through the native tools/tool_calls API — never emit <tool_call>, <arg_key>, <arg_value>, or other XML/text tool markup in assistant content. For large file writes, prefer multiple smaller run_shell calls (chunked appends) over one huge heredoc so the call cannot be truncated by max_tokens."
                 :parameters (:type "object"
                              :properties (:command (:type "string"
-                                                    :description "Shell command to run via /bin/sh -lc.")
+                                                    :description "Shell command to run via /bin/sh -lc. Keep individual commands bounded; split large writes.")
                                           :timeout (:type "number"
                                                     :description "Optional wall-clock timeout in seconds. Defaults to 60. On expiry the command is terminated and a timeout message is returned."))
                              :required ("command"))))
     (:type "function"
      :function (:name "reload_harness"
-                :description "Reload self-improving-agent-harness sources into this same Lisp image after editing project Lisp files. Returns a structured status line (status=ok|note|warning|error files=N warnings=N notes=N ...) plus any non-benign compiler diagnostics. Does not reset chat history or max-rounds."
-                :parameters (:type "object")))))
+                :description "Reload self-improving-agent-harness sources into this same Lisp image after editing project Lisp files. Returns a structured status line (status=ok|note|warning|error files=N warnings=N notes=N ...) plus any non-benign compiler diagnostics. Does not reset chat history or max-rounds. ALWAYS invoke through the native tools/tool_calls API only — never XML/text tool markup in assistant content."
+                :parameters (:type "object")))
+    (:type "function"
+     :function (:name "run_subagent"
+                :description "Spawn an independent subagent with its own prompt, provider, and model. Returns immediately with a placeholder; the subagent's final answer is delivered to you in a later turn once it completes. A subagent cannot spawn further subagents. ALWAYS invoke through the native tools/tool_calls API only."
+                :parameters (:type "object"
+                             :properties (:prompt (:type "string"
+                                                   :description "The task/prompt for the subagent. Required.")
+                                          :provider (:type "string"
+                                                     :description "Backend provider for the subagent: 'openrouter', 'synthetic', or 'codex'. Defaults to the current session's provider when omitted.")
+                                          :model (:type "string"
+                                                  :description "Model id for the subagent. Defaults to the current session's model when omitted.")
+                                          :max_rounds (:type "integer"
+                                                       :description "Maximum tool-loop rounds for the subagent. Defaults to 20.")
+                                          :timeout (:type "number"
+                                                    :description "Wall-clock timeout for the whole subagent run in seconds. Defaults to 300. On expiry the subagent is terminated and a timeout error is delivered."))
+                             :required ("prompt"))))))
 
 (defun chat-options ()
   (list :temperature 0.2
-        :max-tokens 4096
+        :max-tokens *chat-max-tokens*
+        :tool-choice "auto"
         :tools (chat-tool-definitions)))
 
 (defun chat-handlers ()
@@ -61,7 +85,8 @@ Symbols are intentional: OPENROUTER-TOOL-HANDLER / FUNCALL re-resolve them on
 each tool call, so redefining SHELL-TOOL or RELOAD-TOOL via reload_harness is
 visible to the already-running interactive session."
   '(("run_shell" . shell-tool)
-    ("reload_harness" . reload-tool)))
+    ("reload_harness" . reload-tool)
+    ("run_subagent" . subagent-tool)))
 
 (defun make-chat-backend ()
   "Construct the chat provider backend from HARNESS_BACKEND (default openrouter).
@@ -156,6 +181,7 @@ supplied, seeds the session from a resumed snapshot."
          (response (chat-session-turn session prompt)))
     (report-completed-chat-turn session start response :leading-newline nil)
     (maybe-run-synthetic-followup-turns session)
+    (maybe-deliver-subagent-results session)
     response))
 
 (defun write-chat-prompt ()
@@ -218,6 +244,7 @@ here so the model can continue without another human line."
      nil)
     ((handle-interactive-command session input)
      (maybe-run-synthetic-followup-turns session)
+     (maybe-deliver-subagent-results session)
      nil)
     (t
      (process-interactive-user-turn session input)

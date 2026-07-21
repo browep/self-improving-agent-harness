@@ -289,8 +289,6 @@ duration-seconds, even when a load error is captured into status=error."
         (file-count 0)
         (message nil))
     (log-interaction :info "tool-call" :tool "reload_harness")
-    (format *error-output* "TOOL_CALL name=reload_harness~%")
-    (finish-output *error-output*)
     (unwind-protect
          (handler-case
              (progn
@@ -369,7 +367,7 @@ duration-seconds, even when a load error is captured into status=error."
                                :status status
                                :file-count file-count)))
         (format *error-output*
-                "TOOL_DONE name=reload_harness status=~A warnings=~D notes=~D duration_seconds=~,3F~%"
+                "RELOAD_SUMMARY status=~A warnings=~D notes=~D duration_seconds=~,3F~%"
                 status warning-count note-count duration)
         (finish-output *error-output*)))
     ;; Queue a synthetic follow-up so newly registered tools can be advertised

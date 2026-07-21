@@ -168,6 +168,77 @@ trips as the intended escape rather than an invalid raw byte."
           :name (openrouter-json-field function "name")
           :arguments (openrouter-json-field function "arguments"))))
 
+(defun openrouter-message-text (message)
+  "Extract plain assistant/user text from a provider message object.
+
+CONTENT may be a string, null, or an OpenAI-style array of parts
+({type:text,text:...}, ...). Non-text parts are ignored. Returns an empty string when no
+usable text is present so callers never see NIL content."
+  (let ((content (openrouter-json-field message "content")))
+    (cond
+      ((null content) "")
+      ((stringp content) content)
+      ((or (listp content) (vectorp content))
+       (with-output-to-string (out)
+         (dolist (part (openrouter-list content))
+           (let* ((ptype (openrouter-json-field part "type"))
+                  (text (or (openrouter-json-field part "text")
+                            (openrouter-json-field part "content"))))
+             (when (and (stringp text)
+                        (plusp (length text))
+                        (or (null ptype)
+                            (string= ptype "text")
+                            (string= ptype "output_text")))
+               (write-string text out))))))
+      (t (princ-to-string content)))))
+
+(defun empty-completion-text-p (text)
+  "True when TEXT is missing or only whitespace."
+  (or (null text)
+      (and (stringp text)
+           (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) text))))))
+
+(defun truncated-empty-final-response-p (response)
+  "True when RESPONSE ended the tool loop with finish_reason=length and no text.
+
+Observed with reasoning-heavy models (e.g. GLM via Synthetic): a large HTTP body
+can still normalize to empty message.content when the model exhausts max_tokens
+on hidden/reasoning tokens. Treating that as a successful final answer makes the
+chat look dead (blank stdout + <<< DONE)."
+  (and response
+       (let ((calls (completion-response-tool-calls response)))
+         (or (null calls) (zerop (length calls))))
+       (let ((reason (completion-response-finish-reason response)))
+         (and (stringp reason) (string-equal reason "length")))
+       (empty-completion-text-p (completion-response-text response))))
+
+(defparameter *tool-loop-length-retry-limit* 1
+  "How many times RUN-TOOL-LOOP may auto-continue after an empty finish_reason=length
+final response before synthesizing a visible diagnostic answer.
+
+0 disables auto-continue (still synthesizes a diagnostic). Bound or set at runtime.")
+
+(defparameter +truncated-empty-final-nudge+
+  "HARNESS: Your previous completion hit finish_reason=length with empty message content (no tool calls and no user-visible text). This usually means max_tokens was consumed by reasoning or an unfinished answer. Continue from the current task and produce either a concise final answer or a smaller native tool call. Do not repeat large tool outputs."
+  "User message injected to recover from an empty truncated final response.")
+
+(defun synthesize-truncated-empty-final-response (response)
+  "Return RESPONSE rewritten with a visible diagnostic final text.
+
+Preserves model/raw/usage/finish-reason so accounting and logs stay accurate."
+  (make-completion-response
+   :text (format nil
+                 "[harness] Model returned finish_reason=length with empty content ~
+(no tool calls). The turn produced no user-visible answer—often because ~
+max_tokens was exhausted by reasoning or a truncated draft. Retry with a ~
+smaller next step, raise max_tokens, or continue the task explicitly.")
+   :model (completion-response-model response)
+   :raw (completion-response-raw response)
+   :tool-calls (completion-response-tool-calls response)
+   :finish-reason (completion-response-finish-reason response)
+   :provider-request-id (completion-response-provider-request-id response)
+   :usage (completion-response-usage response)))
+
 (defun openrouter-response-from-json (raw-response)
   "Normalize one decoded, non-streaming OpenRouter response alist."
   (let* ((choice (first (openrouter-list
@@ -175,7 +246,7 @@ trips as the intended escape rather than an invalid raw byte."
          (message (openrouter-json-field choice "message"))
          (usage (openrouter-json-field raw-response "usage")))
     (make-completion-response
-     :text (or (openrouter-json-field message "content") "")
+     :text (openrouter-message-text message)
      :model (openrouter-json-field raw-response "model")
      :raw raw-response
      :tool-calls (mapcar #'openrouter-normalize-tool-call
@@ -288,33 +359,96 @@ model can narrow the command and re-run it rather than silently losing data."
     (error ()
       (error "Tool ~S supplied invalid JSON arguments." (getf tool-call :name)))))
 
+(defun truncate-for-tool-display (text &optional (max-chars 80))
+  "Return TEXT limited to MAX-CHARS for console display, appending an ellipsis.
+
+Shared by the centralized TOOL_CALL/TOOL_DONE markers so every tool gets a
+bounded, consistent preview without each handler reimplementing truncation."
+  (if (and (stringp text) (> (length text) max-chars))
+      (concatenate 'string (subseq text 0 max-chars) "...")
+      (or text "")))
+
+(defun emit-tool-call-marker (name arguments-json)
+  "Print the standard TOOL_CALL console marker (stderr) for any tool.
+
+Centralizing this in OPENROUTER-TOOL-RESULT-MESSAGE means every registered tool
+gets a visible spawn line on the console without each handler emitting its own."
+  (format *error-output*
+          "TOOL_CALL name=~A arguments=~S~%"
+          (or name "unknown")
+          (truncate-for-tool-display arguments-json 120))
+  (finish-output *error-output*))
+
+(defun emit-tool-done-marker (name status duration-seconds result)
+  "Print the standard TOOL_DONE console marker (stderr) for any tool.
+
+STATUS is a short label such as ok, error, or recovered. RESULT is the
+already-truncated tool result content for preview."
+  (format *error-output*
+          "TOOL_DONE name=~A status=~A duration_seconds=~,3F result=~S~%"
+          (or name "unknown") status duration-seconds
+          (truncate-for-tool-display result 120))
+  (finish-output *error-output*))
+
 (defun openrouter-tool-result-message (tool-call handlers)
   (let* ((name (getf tool-call :name))
-         (handler (openrouter-tool-handler handlers name)))
-    (unless handler
-      (error "No handler is registered for tool ~S." name))
-    (let* ((arguments (openrouter-tool-arguments tool-call))
-           (arg-text
-             (handler-case
-                 (with-output-to-string (stream)
-                   (yason:encode arguments stream))
-               (error () (princ-to-string (getf tool-call :arguments)))))
-           (result
-             (handler-case
-                 (funcall handler arguments)
-               (error ()
-                 (format nil "TOOL_ERROR: Tool ~A failed." name))))
-           (content (truncate-tool-result-content
-                     (openrouter-tool-result-content result))))
-      (log-interaction :info "tool-completed"
-                       :tool (or name "unknown")
-                       :tool-call-id (or (getf tool-call :id) "none")
-                       :arguments arg-text
-                       :tool-result (if (stringp content) content (princ-to-string content))
-                       :output-length (if (stringp content) (length content) 0))
-      (list :role "tool"
-            :tool-call-id (getf tool-call :id)
-            :content content))))
+         (synthetic (getf tool-call :synthetic-result)))
+    ;; Recovered truncated/malformed text tool calls carry SYNTHETIC-RESULT and
+    ;; must not execute a handler (the command payload may be incomplete).
+    (if (stringp synthetic)
+        (let* ((call-start (get-internal-real-time))
+               (content (truncate-tool-result-content synthetic)))
+          (emit-tool-call-marker name (or (getf tool-call :arguments) "{}"))
+          (log-interaction :error "tool-failed"
+                           :tool (or name "unknown")
+                           :tool-call-id (or (getf tool-call :id) "none")
+                           :reason "text-tool-call-recovery"
+                           :recovery (let ((r (getf tool-call :recovery)))
+                                       (when r (string-downcase (symbol-name r))))
+                           :arguments (or (getf tool-call :arguments) "{}")
+                           :tool-result content
+                           :output-length (length content))
+          (emit-tool-done-marker name "recovered"
+                                  (/ (float (- (get-internal-real-time) call-start) 0d0)
+                                     internal-time-units-per-second)
+                                  content)
+          (list :role "tool"
+                :tool-call-id (getf tool-call :id)
+                :content content))
+        (let ((handler (openrouter-tool-handler handlers name)))
+          (unless handler
+            (error "No handler is registered for tool ~S." name))
+          (let* ((arguments (openrouter-tool-arguments tool-call))
+                 (arg-text
+                   (handler-case
+                       (with-output-to-string (stream)
+                         (yason:encode arguments stream))
+                     (error () (princ-to-string (getf tool-call :arguments)))))
+                 (call-start (get-internal-real-time)))
+            (emit-tool-call-marker name arg-text)
+            (let* ((result
+                     (handler-case
+                         (funcall handler arguments)
+                       (error ()
+                         (format nil "TOOL_ERROR: Tool ~A failed." name))))
+                   (content (truncate-tool-result-content
+                             (openrouter-tool-result-content result)))
+                   (duration (/ (float (- (get-internal-real-time) call-start) 0d0)
+                               internal-time-units-per-second)))
+              (log-interaction :info "tool-completed"
+                               :tool (or name "unknown")
+                               :tool-call-id (or (getf tool-call :id) "none")
+                               :arguments arg-text
+                               :tool-result (if (stringp content) content (princ-to-string content))
+                               :output-length (if (stringp content) (length content) 0)
+                               :recovery (let ((r (getf tool-call :recovery)))
+                                           (when r (string-downcase (symbol-name r)))))
+              (emit-tool-done-marker name
+                                     (if (search "TOOL_ERROR" (or content "")) "error" "ok")
+                                     duration content)
+              (list :role "tool"
+                    :tool-call-id (getf tool-call :id)
+                    :content content)))))))
 
 (defun response-accounting-value (response usage-key)
   "Return USAGE-KEY only when this response supplies a numeric actual value."
@@ -418,6 +552,181 @@ Tunable at runtime; reload_harness picks up new values.")
 Bound in RUN-TOOL-LOOP so HTTP-boundary events emitted inside COMPLETE can carry
 the round without changing the COMPLETE generic-function signature.")
 
+
+(defun text-embedded-tool-call-prefix-p (text)
+  "Return true when TEXT appears to contain an XML-ish embedded tool call."
+  (and (stringp text)
+       (search "<tool_call>" text :test #'char-equal)))
+
+(defun parse-text-embedded-tool-call-arguments (body)
+  "Parse zero or more <arg_key>/<arg_value> pairs from BODY into an alist.
+
+Returns the alist, or :INCOMPLETE when markup is truncated/unclosed."
+  (let ((cursor 0)
+        (pairs '()))
+    (loop
+      (let ((key-open (search "<arg_key>" body :start2 cursor :test #'char-equal)))
+        (unless key-open
+          (return))
+        (let* ((key-start (+ key-open (length "<arg_key>")))
+               (key-close (search "</arg_key>" body :start2 key-start :test #'char-equal)))
+          (unless key-close
+            (return-from parse-text-embedded-tool-call-arguments :incomplete))
+          (let* ((key (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                   (subseq body key-start key-close)))
+                 (value-open (search "<arg_value>" body
+                                     :start2 (+ key-close (length "</arg_key>"))
+                                     :test #'char-equal)))
+            (unless value-open
+              (return-from parse-text-embedded-tool-call-arguments :incomplete))
+            (let* ((value-start (+ value-open (length "<arg_value>")))
+                   (value-close (search "</arg_value>" body
+                                        :start2 value-start
+                                        :test #'char-equal)))
+              (unless value-close
+                (return-from parse-text-embedded-tool-call-arguments :incomplete))
+              (push (cons key (subseq body value-start value-close)) pairs)
+              (setf cursor (+ value-close (length "</arg_value>"))))))))
+    (nreverse pairs)))
+
+(defun encode-tool-arguments-json (pairs)
+  "Encode PARS alist as a JSON object string for tool-call arguments."
+  (with-output-to-string (stream)
+    (let ((object (make-hash-table :test #'equal)))
+      (dolist (pair pairs)
+        (setf (gethash (car pair) object) (cdr pair)))
+      (yason:encode object stream))))
+
+(defun make-recovered-tool-call (name arguments-json &key (recovery :xml-text)
+                                                    synthetic-result)
+  "Build a normalized tool-call plist, optionally with a non-executing result."
+  (list :id (format nil "recovered-~A"
+                    (string-downcase (symbol-name (gensym "TC"))))
+        :type "function"
+        :name name
+        :arguments (or arguments-json "{}")
+        :recovery recovery
+        :synthetic-result synthetic-result))
+
+(defun parse-text-embedded-tool-calls (text)
+  "Parse XML-ish <tool_call> blocks from TEXT.
+
+Returns three values:
+  1. list of normalized tool-call plists (possibly empty)
+  2. leading prose before the first tool_call, or NIL
+  3. recovery status: NIL, :XML-TEXT, or :TRUNCATED
+
+Complete calls become tool-call plists with :RECOVERY :XML-TEXT.
+Incomplete markup yields one synthetic tool-call with :SYNTHETIC-RESULT set so
+the tool loop can return an error without executing a handler."
+  (unless (text-embedded-tool-call-prefix-p text)
+    (return-from parse-text-embedded-tool-calls (values '() nil nil)))
+  (let* ((start (search "<tool_call>" text :test #'char-equal))
+         (leading (when (and start (plusp start))
+                    (string-right-trim
+                     '(#\Space #\Tab #\Newline #\Return)
+                     (subseq text 0 start))))
+         (cursor start)
+         (calls '())
+         (status nil))
+    (loop while (and cursor (< cursor (length text)))
+          do (let ((open (search "<tool_call>" text :start2 cursor :test #'char-equal)))
+               (unless open
+                 (return))
+               (let ((name-start (+ open (length "<tool_call>"))))
+                 (loop while (and (< name-start (length text))
+                                  (find (char text name-start)
+                                        '(#\Space #\Tab #\Newline #\Return)))
+                       do (incf name-start))
+                 (let ((name-end name-start))
+                   (loop while (and (< name-end (length text))
+                                    (let ((ch (char text name-end)))
+                                      (or (alphanumericp ch)
+                                          (find ch "_-"))))
+                         do (incf name-end))
+                   (let ((name (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                            (subseq text name-start name-end))))
+                     (when (zerop (length name))
+                       (setf status :truncated)
+                       (push (make-recovered-tool-call
+                              "unknown"
+                              "{}"
+                              :recovery :truncated
+                              :synthetic-result
+                              "TOOL_ERROR: Truncated or malformed text tool call was not executed. Use the native tools/tool_calls API (not <tool_call> XML). If the command is large, split it into smaller run_shell calls.")
+                             calls)
+                       (return))
+                     (let* ((close (search "</tool_call>" text
+                                           :start2 name-end
+                                           :test #'char-equal))
+                            (body-end (or close (length text)))
+                            (body (subseq text name-end body-end))
+                            (pairs (parse-text-embedded-tool-call-arguments body)))
+                       (cond
+                         ((or (eq pairs :incomplete) (null close))
+                          (setf status :truncated)
+                          (push (make-recovered-tool-call
+                                 name
+                                 "{}"
+                                 :recovery :truncated
+                                 :synthetic-result
+                                 (format nil
+                                         "TOOL_ERROR: Truncated text tool call for ~A was not executed (incomplete <tool_call> markup or finish_reason=length). Retry with the native tools/tool_calls API and a smaller command payload."
+                                         name))
+                                calls)
+                          (return))
+                         (t
+                          (setf status (or status :xml-text))
+                          (push (make-recovered-tool-call
+                                 name
+                                 (encode-tool-arguments-json pairs)
+                                 :recovery :xml-text)
+                                calls)
+                          (setf cursor (+ close (length "</tool_call>")))))))))))
+    (values (nreverse calls)
+            (and leading (plusp (length leading)) leading)
+            status)))
+
+
+(defun maybe-recover-text-embedded-tool-calls (response)
+  "If RESPONSE has no structured tool-calls, recover XML-ish calls from text.
+
+Native message.tool_calls always win. Recovery is a compatibility fallback for
+providers/models that emit <tool_call>/<arg_key>/<arg_value> markup in content
+instead of the OpenAI-compatible tool_calls array. Incomplete markup never
+executes a handler; it becomes a synthetic error tool result."
+  (let ((existing (completion-response-tool-calls response))
+        (text (completion-response-text response))
+        (finish (completion-response-finish-reason response)))
+    (cond
+      ((and existing (plusp (length existing)))
+       response)
+      ((not (text-embedded-tool-call-prefix-p text))
+       response)
+      (t
+       (multiple-value-bind (calls leading status)
+           (parse-text-embedded-tool-calls text)
+         (if (null calls)
+             response
+             (progn
+               (log-interaction :warn "tool-call-text-recovery"
+                                :recovery (string-downcase (symbol-name status))
+                                :finish-reason (or finish "unknown")
+                                :tool-call-count (length calls)
+                                :tool-names (mapcar (lambda (call)
+                                                      (or (getf call :name) "unknown"))
+                                                    calls)
+                                :response-text text)
+               (make-completion-response
+                :text (or leading "")
+                :model (completion-response-model response)
+                :raw (completion-response-raw response)
+                :tool-calls calls
+                :finish-reason finish
+                :provider-request-id (completion-response-provider-request-id response)
+                :usage (completion-response-usage response)))))))))
+
+
 (defun run-tool-loop (backend request handlers &key (max-rounds 60))
   "Run REQUEST through BACKEND, executing registered tool calls until completion.
 
@@ -425,14 +734,14 @@ HANDLERS is an alist of tool-name to function designator (function object or
 symbol). Symbols are resolved on each tool call so reload_harness can replace
 handler implementations mid-session.
 
-MAX-ROUNDS is the effective tool-call round limit (no multiplier). The third
+MAX-ROUNDS is the requested tool-call round limit; the effective limit is 3x this value. The third
 return value is the ordered provider-response trace required by the supervisor
 accounting boundary; callers that only consume two values are unchanged.
 
 Provider timing: PROVIDER-REQUEST is logged before COMPLETE starts, and
 PROVIDER-RESPONSE includes DURATION-SECONDS so hangs waiting on the API are
 visible even when the process is later killed."
-  (let ((effective-max-rounds max-rounds))
+  (let ((effective-max-rounds (* 3 max-rounds)))
     (labels ((tool-names-from-options (options)
                (let ((tools (getf options :tools)))
                  (when (listp tools)
@@ -471,36 +780,83 @@ visible even when the process is later killed."
                                     :tool (or (getf tool-call :name) "unknown")
                                     :arguments (or (getf tool-call :arguments) "{}")
                                     :round round))))
-             (run-next-round (current-request round responses)
+             (run-next-round (current-request round responses length-retries)
                (log-provider-request current-request round)
                (let ((start (get-internal-real-time)))
                  (handler-case
                      (let* ((*provider-round* round)
-                            (response (complete backend current-request)))
+                            (response (maybe-recover-text-embedded-tool-calls
+                                       (complete backend current-request))))
                        (log-provider-response current-request round response
                                               (elapsed-seconds-since start))
-                       (if (null (completion-response-tool-calls response))
-                           (values response
-                                   (completion-request-messages current-request)
-                                   (nreverse (cons response responses)))
-                           (progn
-                             (when (>= round effective-max-rounds)
-                               (error "Tool-call loop exceeded its ~D round limit."
-                                      effective-max-rounds))
-                             (let* ((tool-calls (completion-response-tool-calls response))
-                                    (next-messages
-                                      (append (completion-request-messages current-request)
-                                              (list (openrouter-assistant-tool-call-message response))
-                                              (mapcar (lambda (tool-call)
-                                                        (openrouter-tool-result-message tool-call handlers))
-                                                      tool-calls)))
-                                    (next-request
-                                      (make-completion-request
-                                       :model (completion-request-model current-request)
-                                       :messages next-messages
-                                       :options (completion-request-options current-request))))
-                               (run-next-round next-request (1+ round)
-                                               (cons response responses))))))
+                       (cond
+                         ((completion-response-tool-calls response)
+                          (when (>= round effective-max-rounds)
+                            (error "Tool-call loop exceeded its ~D round limit."
+                                   effective-max-rounds))
+                          (let* ((tool-calls (completion-response-tool-calls response))
+                                 (next-messages
+                                   (append (completion-request-messages current-request)
+                                           (list (openrouter-assistant-tool-call-message response))
+                                           (mapcar (lambda (tool-call)
+                                                     (openrouter-tool-result-message tool-call handlers))
+                                                   tool-calls)))
+                                 (next-request
+                                   (make-completion-request
+                                    :model (completion-request-model current-request)
+                                    :messages next-messages
+                                    :options (completion-request-options current-request))))
+                            (run-next-round next-request (1+ round)
+                                            (cons response responses)
+                                            length-retries)))
+                         ((and (truncated-empty-final-response-p response)
+                               (integerp *tool-loop-length-retry-limit*)
+                               (< length-retries *tool-loop-length-retry-limit*)
+                               (< round effective-max-rounds))
+                          ;; Empty finish_reason=length is not a successful final
+                          ;; answer. Nudge once (by default) so the model can emit
+                          ;; visible text or a smaller tool call instead of a blank turn.
+                          (log-interaction :warn "provider-empty-length-retry"
+                                           :round round
+                                           :model (or (completion-response-model response)
+                                                      (completion-request-model current-request))
+                                           :finish-reason
+                                           (or (completion-response-finish-reason response)
+                                               "length")
+                                           :length-retry (1+ length-retries)
+                                           :length-retry-limit *tool-loop-length-retry-limit*)
+                          (let* ((next-messages
+                                   (append (completion-request-messages current-request)
+                                           (list (list :role "assistant"
+                                                       :content
+                                                       (or (completion-response-text response) ""))
+                                                 (list :role "user"
+                                                       :content +truncated-empty-final-nudge+))))
+                                 (next-request
+                                   (make-completion-request
+                                    :model (completion-request-model current-request)
+                                    :messages next-messages
+                                    :options (completion-request-options current-request))))
+                            (run-next-round next-request (1+ round)
+                                            (cons response responses)
+                                            (1+ length-retries))))
+                         ((truncated-empty-final-response-p response)
+                          (log-interaction :warn "provider-empty-length-final"
+                                           :round round
+                                           :model (or (completion-response-model response)
+                                                      (completion-request-model current-request))
+                                           :finish-reason
+                                           (or (completion-response-finish-reason response)
+                                               "length")
+                                           :length-retries length-retries)
+                          (let ((synthetic (synthesize-truncated-empty-final-response response)))
+                            (values synthetic
+                                    (completion-request-messages current-request)
+                                    (nreverse (cons synthetic responses)))))
+                         (t
+                          (values response
+                                  (completion-request-messages current-request)
+                                  (nreverse (cons response responses))))))
                    (error (condition)
                      (log-interaction :error "provider-request-failed"
                                       :round round
@@ -508,7 +864,7 @@ visible even when the process is later killed."
                                       :duration-seconds (elapsed-seconds-since start)
                                       :message (princ-to-string condition))
                      (error condition))))))
-      (run-next-round request 0 '()))))
+      (run-next-round request 0 '() 0))))
 
 (defun openrouter-log-url (url)
   "Return a host-only, credential-free form of URL for logging (FR-7.2)."

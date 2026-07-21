@@ -37,11 +37,30 @@ Format:
   "Print RESPONSE text and the structured final-response OUTCOME.
 
 LEADING-NEWLINE is true for interactive turns (separate the answer from the
-prompt chrome) and false for one-shot mode."
-  (let ((duration (elapsed-seconds-since start-internal-time))
-        (rounds (count-tool-loop-rounds
-                 (chat-session-last-provider-responses session)))
-        (text (completion-response-text response)))
+prompt chrome) and false for one-shot mode.
+
+When the model returns no user-visible text, print an explicit placeholder so
+the console never looks like a silent hang. finish_reason is included when
+present (e.g. length) to make truncated empty finals diagnosable without JSONL."
+  (let* ((duration (elapsed-seconds-since start-internal-time))
+         (rounds (count-tool-loop-rounds
+                  (chat-session-last-provider-responses session)))
+         (raw-text (completion-response-text response))
+         (finish (completion-response-finish-reason response))
+         (blank-p (or (null raw-text)
+                      (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                                  raw-text)))))
+         (text
+           (if blank-p
+               (format nil
+                       "[harness] Empty model response~@[ (finish_reason=~A)~]."
+                       finish)
+               raw-text)))
+    (when blank-p
+      (format *error-output*
+              "WARN empty-final-response rounds=~D finish_reason=~A~%"
+              rounds (or finish "unknown"))
+      (finish-output *error-output*))
     (if leading-newline
         (format t "~%~A~%" text)
         (format t "~A~%" text))
@@ -124,6 +143,7 @@ new tool registration can continue without another human message."
              (response (chat-session-turn session input)))
         (report-completed-chat-turn session start response :leading-newline t)
         (maybe-run-synthetic-followup-turns session)
+        (maybe-deliver-subagent-results session)
         response)
     (error (condition)
       (note-chat-session-failure session)
@@ -133,4 +153,5 @@ new tool registration can continue without another human message."
       (finish-output *error-output*)
       ;; Still allow a follow-up if reload succeeded before the primary turn failed.
       (maybe-run-synthetic-followup-turns session)
+      (maybe-deliver-subagent-results session)
       nil)))
