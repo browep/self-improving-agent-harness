@@ -27,7 +27,10 @@
               :key #'web-session-durable-session-id :test #'string=)
         (web-register-session
          (make-web-session
-          :backend (web-selected-backend (or (getf descriptor :backend) "synthetic"))
+          :backend (web-selected-backend (let ((saved (getf descriptor :backend)))
+                                           (if (member saved '("synthetic" "openrouter" "codex") :test #'string=)
+                                               saved
+                                               "synthetic")))
           :model (or (getf descriptor :model) "syn:large:text")
           :max-rounds (or (getf descriptor :max-rounds) 60)
           :history (getf descriptor :history)
@@ -76,7 +79,7 @@
       (cond ((string= name "synthetic") (make-synthetic-backend :api-key (uiop:getenv "SYNTHETIC_API_KEY")))
             ((string= name "openrouter") (make-openrouter-backend :api-key (uiop:getenv "OPENROUTER_API_KEY")))
             ((string= name "codex") (make-codex-app-server-backend))
-            (t (error "Backend must be synthetic, openrouter, or codex.")))))
+            (t (error "Backend must be synthetic, openrouter, or codex; got ~S." name)))))
 
 (defun web-html-escape (text)
   (with-output-to-string (out)
