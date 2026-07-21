@@ -33,6 +33,24 @@ are integers when the provider supplied them, or :unavailable otherwise."
          (total (getf aggregate :total-tokens)))
     (values input output total)))
 
+(defun last-round-context-tokens (accounting)
+  "Return the prompt-token count of the last provider round in ACCOUNTING.
+
+The aggregate input/total tokens sum prompt_tokens across ALL rounds, but each
+round's prompt_tokens already includes the full conversation history. Summing
+them massively inflates the apparent context usage (e.g. 14 rounds at ~70K each
+sums to ~970K, but the actual context fill is just the last round's ~70K).
+
+The last round's prompt_tokens is the true measure of context-window fill
+because it contains the entire conversation up to that point. Returns NIL when
+no per-round invocation data is available or the last round lacks numeric
+input tokens."
+  (let* ((invocations (getf accounting :invocations))
+         (last-invocation (first (last invocations))))
+    (when (and last-invocation
+               (integerp (getf last-invocation :input-tokens)))
+      (getf last-invocation :input-tokens))))
+
 (defun format-context-fill-suffix (backend model accounting)
   "Return a string suffix for the DONE line describing token usage and context fill.
 
@@ -44,7 +62,14 @@ Format when context length is known:
   tokens=in/out/total context=used/max (P%)
 Format when only tokens are known (no context ceiling):
   tokens=in/out/total
-Tokens that are :unavailable are shown as \"?\"."
+Tokens that are :unavailable are shown as \"?\".
+
+The tokens=in/out/total values are the AGGREGATE sums across all rounds (total
+tokens billed). The context=used value is the LAST ROUND's prompt_tokens, which
+is the true context-window fill (the last request contains the full conversation
+history). Using the aggregate sum for context fill would be wrong because each
+round's prompt_tokens already includes all prior history, so summing them
+double-counts."
   (multiple-value-bind (input output total)
       (turn-accounting-tokens accounting)
     (let ((has-tokens (or (integerp input) (integerp output) (integerp total))))
@@ -56,7 +81,8 @@ Tokens that are :unavailable are shown as \"?\"."
                  (tot-str (if (integerp total) (princ-to-string total) "?"))
                  (token-part (format nil "tokens=~A/~A/~A" in-str out-str tot-str)))
             (if (integerp ctx-len)
-                (let* ((used (or total input 0))
+                (let* ((used (or (last-round-context-tokens accounting)
+                                 total input 0))
                        (pct (context-fill-percentage used ctx-len)))
                   (format nil "~A context=~D/~D~@[ (~D%)~]"
                           token-part used ctx-len pct))

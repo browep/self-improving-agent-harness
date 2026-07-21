@@ -152,6 +152,49 @@
                    "outcome suffix never embeds the model id")))
     (self-improving-agent-harness::reset-model-metadata-cache))
 
+  ;; Context fill uses the LAST round's prompt_tokens, not the aggregate sum.
+  ;; Each round's prompt_tokens includes the full conversation history, so
+  ;; summing them across rounds massively inflates the apparent context usage.
+  ;; The last round's input is the true context-window fill.
+  (self-improving-agent-harness::reset-model-metadata-cache)
+  (let ((backend (self-improving-agent-harness::make-openrouter-backend :api-key "k")))
+    (self-improving-agent-harness::store-model-metadata
+     "openrouter"
+     (yason:parse
+      "{\"data\":[{\"id\":\"test/model\",\"context_length\":200000,\"top_provider\":{\"context_length\":200000}}]}"))
+    (let ((stderr (make-string-output-stream)))
+      (let ((*error-output* stderr))
+        (self-improving-agent-harness:write-final-response-outcome
+         :rounds 3 :duration-seconds 0.5d0
+         :backend backend
+         :model "test/model"
+         :accounting (list :aggregate
+                           (list :input-tokens 100000 :input-tokens-state "actual"
+                                 :output-tokens 3000 :output-tokens-state "actual"
+                                 :total-tokens 103000 :total-tokens-state "actual"
+                                 :cost-usd 0 :cost-usd-state "actual")
+                           :invocations
+                           (list (list :input-tokens 30000 :output-tokens 1000
+                                       :total-tokens 31000 :model "test/model"
+                                       :provider "openrouter" :outcome "completed")
+                                 (list :input-tokens 50000 :output-tokens 1000
+                                       :total-tokens 51000 :model "test/model"
+                                       :provider "openrouter" :outcome "completed")
+                                 (list :input-tokens 70000 :output-tokens 1000
+                                       :total-tokens 71000 :model "test/model"
+                                       :provider "openrouter" :outcome "completed")))))
+      (let ((out (get-output-stream-string stderr)))
+        ;; Aggregate tokens (sum across all rounds) still shown for billing.
+        (ensure-true (search "tokens=100000/3000/103000" out)
+                     "outcome reports aggregate token sums for billing")
+        ;; Context fill uses the LAST round's input (70000), not the aggregate
+        ;; total (103000) which would show 51% instead of the true 35%.
+        (ensure-true (search "context=70000/200000 (35%)" out)
+                     "context fill uses last round prompt_tokens, not aggregate sum")
+        (ensure-true (not (search "context=103000" out))
+                     "context fill does not use inflated aggregate total")))
+    (self-improving-agent-harness::reset-model-metadata-cache))
+
   ;; CLI sessions store options/handlers as symbols so later turns re-resolve.
   (let ((session (self-improving-agent-harness::make-cli-chat-session nil "test/model" 9)))
     (ensure-equal 'self-improving-agent-harness:chat-options
