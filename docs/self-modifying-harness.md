@@ -160,4 +160,5 @@ pinned parent evaluator and held-out task set.
 - [Experiment model and DSL](experiment-model.md)
 - [Baseline fixture and evaluator](baseline-fixture.md)
 - [Structured source-mutation prototype](source-mutations.md)
+- [What Common Lisp unlocks for a self-modifying LLM harness](common-lisp-harness-roadmap.md)
 - [Runtime contract](runtime.md)
