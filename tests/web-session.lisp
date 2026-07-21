@@ -28,7 +28,17 @@
                   (getf (car (last (web-session-events session))) :text)
                   "the completed browser event contains the final assistant text")
     (ensure-equal 3 (length (chat-session-history (web-session-chat-session session)))
-                  "a successful browser turn uses the normal persistent chat history"))
+                  "a successful browser turn uses the normal persistent chat history")
+    (let ((old-id (web-session-id session)))
+      (web-session-clear session)
+      (ensure-true (not (string= old-id (web-session-id session)))
+                   "clear replaces the opaque browser session ID")
+      (ensure-equal 1 (length (web-session-events session))
+                    "clear discards the prior timeline")
+      (ensure-equal "session-cleared" (web-event-kind (first (web-session-events session)))
+                    "clear emits only the replacement lifecycle event")
+      (ensure-equal 1 (length (chat-session-history (web-session-chat-session session)))
+                    "clear keeps only the system message in replacement history")))
   (let* ((tool-response (make-completion-response
                          :model "test/model"
                          :tool-calls '((:id "web-call-1" :type "function" :name "echo"

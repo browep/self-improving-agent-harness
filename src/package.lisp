@@ -68,6 +68,7 @@
    #:web-session-turn-number
    #:web-session-record-event
    #:web-session-submit
+   #:web-session-clear
    #:run-web-server
    #:completion-request
    #:make-completion-request

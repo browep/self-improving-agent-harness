@@ -83,3 +83,25 @@ this persistence boundary."
                                   :state "failed-turn"
                                   :message "The turn failed. Retry is available.")
         nil))))
+
+(defun web-session-clear (session)
+  "Replace SESSION's in-memory conversation only while idle.
+
+No workspace snapshots or diagnostic files are selected or deleted here."
+  (when (eq (web-session-state session) :running)
+    (error "Cannot clear a browser session while its turn is running."))
+  (let ((old-chat (web-session-chat-session session)))
+    (setf (web-session-id session) (uuid-v4-string)
+          (web-session-chat-session session)
+          (make-chat-session :backend (chat-session-backend old-chat)
+                             :model (chat-session-model old-chat)
+                             :options (chat-session-options old-chat)
+                             :handlers (chat-session-handlers old-chat)
+                             :max-rounds (chat-session-max-rounds old-chat))
+          (web-session-events session) '()
+          (web-session-state session) :ready
+          (web-session-turn-number session) 0)
+    (web-session-record-event session "session-cleared"
+                              :session-id (web-session-id session)
+                              :state "ready")
+    session))

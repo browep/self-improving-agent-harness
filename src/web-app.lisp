@@ -59,6 +59,7 @@
          (session-id (web-mark (clog:create-div root :content "") "session-id"))
          (composer (web-mark (clog:create-form-element root :textarea) "prompt-composer"))
          (send (web-mark (clog:create-button root :content "Send") "send-turn"))
+         (clear (web-mark (clog:create-button root :content "Clear session") "clear-session"))
          (timeline (web-mark (clog:create-div root :class "timeline") "timeline"))
          (session nil))
     (declare (ignore heading))
@@ -85,6 +86,17 @@
          (web-session-submit session (clog:value composer))
          (setf (clog:value composer) "")
          (dolist (event (rest (web-session-events session)))
+           (web-render-event timeline event)))))
+    (clog:set-on-click
+     clear
+     (lambda (obj)
+       (declare (ignore obj))
+       (when session
+         (web-session-clear session)
+         (setf (clog:inner-html timeline) ""
+               (clog:inner-html state) "ready"
+               (clog:inner-html session-id) (web-session-id session))
+         (dolist (event (web-session-events session))
            (web-render-event timeline event)))))
     (clog:run body)))
 
