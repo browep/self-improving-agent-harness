@@ -1,0 +1,23 @@
+#!/usr/bin/env sh
+set -eu
+
+port=17881
+session_id=${HARNESS_CHAT_SESSION_ID:-}
+fake_scenario=${HARNESS_WEB_FAKE_SCENARIO:-}
+publish_mode=--publish-loopback
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --port) [ "$#" -ge 2 ] || { echo 'bin/web: --port requires a value' >&2; exit 2; }; port=$2; shift 2 ;;
+    --session-id) [ "$#" -ge 2 ] || { echo 'bin/web: --session-id requires a value' >&2; exit 2; }; session_id=$2; shift 2 ;;
+    --public) publish_mode=--publish-any; shift ;;
+    --fake-scenario) [ "$#" -ge 2 ] || { echo 'bin/web: --fake-scenario requires a value' >&2; exit 2; }; [ "$2" = tool-success ] || { echo 'bin/web: only tool-success is currently supported' >&2; exit 2; }; fake_scenario=$2; shift 2 ;;
+    *) echo "bin/web: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+case "$port" in ''|*[!0-9]*) echo 'bin/web: --port must be a decimal port' >&2; exit 2;; esac
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo 'bin/web: --port must be in 1..65535' >&2; exit 2; }
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export HARNESS_WEB_PORT=18080
+export HARNESS_CHAT_SESSION_ID=$session_id
+export HARNESS_WEB_FAKE_SCENARIO=$fake_scenario
+exec "$repo_root/bin/container" --writable-workspace "$publish_mode" "$port:18080" --env HARNESS_WEB_PORT --env HARNESS_CHAT_SESSION_ID --env HARNESS_WEB_FAKE_SCENARIO --noinform --load scripts/web.lisp

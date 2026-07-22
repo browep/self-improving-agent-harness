@@ -113,13 +113,9 @@ visible to the already-running interactive session."
     ("reload_harness" . reload-tool)
     ("run_subagent" . subagent-tool)))
 
-(defun make-chat-backend ()
-  "Construct the chat provider backend from HARNESS_BACKEND (default openrouter).
-
-Delegates to SELECT-CHAT-BACKEND. Supported values: openrouter (OPENROUTER_API_KEY)
-or codex (ChatGPT/Codex subscription via local app-server). OpenAI Platform
-API-key billing (OPENAI_API_KEY / api.openai.com) is not offered and is rejected."
-  (select-chat-backend))
+(defun make-chat-backend (&key backend)
+  "Construct the chat provider backend, optionally overriding HARNESS_BACKEND."
+  (select-chat-backend :backend backend))
 
 (defun make-cli-chat-session (backend model max-rounds &key history)
   "Build a CLI chat session that re-resolves options/handlers after reload.
@@ -386,24 +382,30 @@ The basename is $SESSION-ID.history.json; strip the trailing .history.json."
                (string= suffix name :start2 (- (length name) (length suffix))))
       (subseq name 0 (- (length name) (length suffix))))))
 
-(defun resolve-resume-plan (log-directory)
+(defun resolve-resume-plan (log-directory &optional preferred-session-id)
   "Return a resume plan for the most recent snapshot under LOG-DIRECTORY, or NIL.
 
 The plan is a plist (:session-id :history :model :max-rounds :path). Returns NIL
 when no snapshot exists or it has no usable messages, so the caller can start a
 fresh session instead."
-  (let ((snapshot (most-recent-session-snapshot log-directory)))
+  (let ((snapshot (if preferred-session-id
+                      (find preferred-session-id (list-session-snapshots log-directory)
+                            :key (lambda (descriptor) (getf descriptor :session-id)) :test #'string=)
+                      (most-recent-session-snapshot log-directory))))
     (when snapshot
-      (let ((history (read-session-history-snapshot snapshot)))
+      (let ((path (if (pathnamep snapshot) snapshot (getf snapshot :path)))
+            (history (if (pathnamep snapshot) nil (getf snapshot :history))))
+        (setf history (or history (read-session-history-snapshot path)))
         (when (and history (listp history))
-          (multiple-value-bind (session-id model max-rounds)
-              (read-session-snapshot-metadata snapshot)
+          (multiple-value-bind (session-id model max-rounds backend)
+              (read-session-snapshot-metadata path)
             (list :session-id (or session-id
-                                  (snapshot-session-id-from-path snapshot))
+                                  (snapshot-session-id-from-path path))
                   :history history
                   :model model
                   :max-rounds max-rounds
-                  :path snapshot)))))))
+                  :backend backend
+                  :path path)))))))
 
 (defparameter *workspace-env-file*
   "/workspace/.env"
@@ -487,7 +489,8 @@ not an error. Returns the list of variable names set."
          (preferred-session-id (uiop:getenv "HARNESS_CHAT_SESSION_ID"))
          (resume-requested (let ((v (uiop:getenv "HARNESS_CHAT_RESUME")))
                              (and v (plusp (length v)))))
-         (resume-plan (when resume-requested (resolve-resume-plan log-directory)))
+         (resume-plan (when resume-requested
+                        (resolve-resume-plan log-directory preferred-session-id)))
          (resume-history (getf resume-plan :history))
          ;; A resumed session adopts the prior snapshot's session id (so its
          ;; JSONL/text/history files continue), model, and round limit -- those
@@ -496,7 +499,12 @@ not an error. Returns the list of variable names set."
          (session-id (or (getf resume-plan :session-id) preferred-session-id))
          (model (or (getf resume-plan :model) model))
          (max-rounds (or (getf resume-plan :max-rounds) max-rounds))
-         (backend (make-chat-backend)))
+         (backend-override (let ((saved (getf resume-plan :backend)))
+                             (and resume-plan
+                                  (not (string= (or (uiop:getenv "HARNESS_CHAT_BACKEND_EXPLICIT") "") "true"))
+                                  (member saved '("openrouter" "synthetic" "codex") :test #'string=)
+                                  saved)))
+         (backend (make-chat-backend :backend backend-override)))
     ;; One session JSONL file per process: agent-logs/$ISO-TIMESTAMP.jsonl under
     ;; the workspace bind-mount so hosts can inspect logs without the Docker
     ;; named volume. Non-timestamp supervisor correlation IDs still work for

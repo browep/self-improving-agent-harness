@@ -556,7 +556,46 @@ the round without changing the COMPLETE generic-function signature.")
 (defun text-embedded-tool-call-prefix-p (text)
   "Return true when TEXT appears to contain an XML-ish embedded tool call."
   (and (stringp text)
-       (search "<tool_call>" text :test #'char-equal)))
+       (or (search "<tool_call>" text :test #'char-equal)
+           (search "<|tool_call_begin|>" text)
+           (search "<run_shell><![CDATA[" text :test #'char-equal))))
+
+(defun parse-cdata-run-shell-tool-call (text)
+  "Recover Qwen's complete <run_shell><![CDATA[COMMAND]]></run_shell> dialect."
+  (let ((open (search "<run_shell><![CDATA[" text :test #'char-equal)))
+    (when open
+      (let* ((start (+ open (length "<run_shell><![CDATA[")))
+             (end (search "]]></run_shell>" text :start2 start :test #'char-equal)))
+        (when (and end (> end start))
+          (let ((command (subseq text start end)))
+            (values (list (make-recovered-tool-call "run_shell"
+                                                    (encode-tool-arguments-json (list (cons "command" command)))
+                                                    :recovery :cdata-run-shell))
+                    (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq text 0 open))
+                    :cdata-run-shell)))))))
+
+(defun parse-kimi-text-tool-calls (text)
+  "Recover complete Kimi sentinel tool markup without guessing arguments.
+
+Accepted shape: <|tool_call_begin|>functions.NAME:INDEX
+<|tool_call_argument_begin|>JSON<|tool_call_end|>.  JSON remains subject to
+normal tool schema validation before execution."
+  (let ((begin (search "<|tool_call_begin|>" text))
+        (section (search "<|tool_calls_section_begin|>" text)))
+    (when begin
+      (let* ((name-start (+ begin (length "<|tool_call_begin|>")))
+             (argument-marker (or (search "<|tool_call_argument_begin|>" text :start2 name-start) -1))
+             (end (and (>= argument-marker 0) (search "<|tool_call_end|>" text :start2 (+ argument-marker (length "<|tool_call_argument_begin|>")))))
+             (raw-name (and (>= argument-marker 0) (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq text name-start argument-marker))))
+             (name (and raw-name (let* ((without-prefix (if (and (>= (length raw-name) 10) (string-equal "functions." raw-name :end2 10)) (subseq raw-name 10) raw-name))
+                                        (colon (position #\: without-prefix)))
+                                   (if colon (subseq without-prefix 0 colon) without-prefix))))
+             (argument-start (+ argument-marker (length "<|tool_call_argument_begin|>")))
+             (arguments (and end (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq text argument-start end)))))
+        (when (and name end arguments (plusp (length arguments)) (char= (char arguments 0) #\{))
+          (values (list (make-recovered-tool-call name arguments :recovery :kimi-sentinel))
+                  (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq text 0 (or section begin)))
+                  :kimi-sentinel))))))
 
 (defun parse-text-embedded-tool-call-arguments (body)
   "Parse zero or more <arg_key>/<arg_value> pairs from BODY into an alist.
@@ -608,6 +647,22 @@ Returns the alist, or :INCOMPLETE when markup is truncated/unclosed."
         :recovery recovery
         :synthetic-result synthetic-result))
 
+(defun parse-controlled-text-tool-call-attributes (tool-name body)
+  "Safely recover RUN_SHELL COMMAND='...' from a closed malformed text call.
+
+This narrow compatibility path never infers missing values or accepts unquoted
+arguments; callers only use it for a complete </tool_call> block."
+  (when (string-equal tool-name "run_shell")
+    (let ((start (search "command=" body :test #'char-equal)))
+      (when start
+        (let* ((quote-index (+ start (length "command=")))
+               (quote (and (< quote-index (length body))
+                           (char body quote-index))))
+          (when (member quote '(#\' #\"))
+            (let ((end (position quote body :start (1+ quote-index))))
+              (when (and end (> end (1+ quote-index)))
+                (list (cons "command" (subseq body (1+ quote-index) end)))))))))))
+
 (defun parse-text-embedded-tool-calls (text)
   "Parse XML-ish <tool_call> blocks from TEXT.
 
@@ -653,7 +708,7 @@ the tool loop can return an error without executing a handler."
                               "{}"
                               :recovery :truncated
                               :synthetic-result
-                              "TOOL_ERROR: Truncated or malformed text tool call was not executed. Use the native tools/tool_calls API (not <tool_call> XML). If the command is large, split it into smaller run_shell calls.")
+                              "TOOL_ERROR: Truncated or malformed text tool call was not executed. Use the native tools/tool_calls API, not <tool_call> XML. For run_shell, call function name run_shell with JSON arguments {\"command\":\"pwd\"}; do not put arguments in markup.")
                              calls)
                        (return))
                      (let* ((close (search "</tool_call>" text
@@ -663,6 +718,16 @@ the tool loop can return an error without executing a handler."
                             (body (subseq text name-end body-end))
                             (pairs (parse-text-embedded-tool-call-arguments body)))
                        (cond
+                         ((and close (null pairs)
+                               (parse-controlled-text-tool-call-attributes name body))
+                          (setf status (or status :controlled-text))
+                          (push (make-recovered-tool-call
+                                 name
+                                 (encode-tool-arguments-json
+                                  (parse-controlled-text-tool-call-attributes name body))
+                                 :recovery :controlled-text)
+                                calls)
+                          (setf cursor (+ close (length "</tool_call>"))))
                          ((or (eq pairs :incomplete) (null close))
                           (setf status :truncated)
                           (push (make-recovered-tool-call
@@ -671,8 +736,8 @@ the tool loop can return an error without executing a handler."
                                  :recovery :truncated
                                  :synthetic-result
                                  (format nil
-                                         "TOOL_ERROR: Truncated text tool call for ~A was not executed (incomplete <tool_call> markup or finish_reason=length). Retry with the native tools/tool_calls API and a smaller command payload."
-                                         name))
+                                         "TOOL_ERROR: Truncated text tool call for ~A was not executed (incomplete <tool_call> markup or finish_reason=length). Retry using native tool_calls: function name ~A with a JSON arguments object (for run_shell: {\"command\":\"pwd\"}), never XML markup."
+                                         name name))
                                 calls)
                           (return))
                          (t
@@ -705,7 +770,11 @@ executes a handler; it becomes a synthetic error tool result."
        response)
       (t
        (multiple-value-bind (calls leading status)
-           (parse-text-embedded-tool-calls text)
+           (cond ((search "<|tool_call_begin|>" text)
+                  (parse-kimi-text-tool-calls text))
+                 ((search "<run_shell><![CDATA[" text :test #'char-equal)
+                  (parse-cdata-run-shell-tool-call text))
+                 (t (parse-text-embedded-tool-calls text)))
          (if (null calls)
              response
              (progn
@@ -727,7 +796,7 @@ executes a handler; it becomes a synthetic error tool result."
                 :usage (completion-response-usage response)))))))))
 
 
-(defun run-tool-loop (backend request handlers &key (max-rounds 60))
+(defun run-tool-loop (backend request handlers &key (max-rounds 60) observer)
   "Run REQUEST through BACKEND, executing registered tool calls until completion.
 
 HANDLERS is an alist of tool-name to function designator (function object or
@@ -742,7 +811,10 @@ Provider timing: PROVIDER-REQUEST is logged before COMPLETE starts, and
 PROVIDER-RESPONSE includes DURATION-SECONDS so hangs waiting on the API are
 visible even when the process is later killed."
   (let ((effective-max-rounds (* 3 max-rounds)))
-    (labels ((tool-names-from-options (options)
+    (labels ((emit-observer (kind &rest fields)
+               (when observer
+                 (apply observer kind fields)))
+             (tool-names-from-options (options)
                (let ((tools (getf options :tools)))
                  (when (listp tools)
                    (mapcar (lambda (tool)
@@ -760,7 +832,10 @@ visible even when the process is later killed."
                                   :message-count (length messages)
                                   :tool-names (mapcar #'princ-to-string (or names '()))
                                   :timeout-seconds
-                                  (or *openrouter-request-timeout-seconds* 0))))
+                                  (or *openrouter-request-timeout-seconds* 0))
+                 (emit-observer "provider-round-started"
+                                :round round
+                                :model (completion-request-model current-request))))
              (log-provider-response (current-request round response duration-seconds)
                (let ((tool-calls (completion-response-tool-calls response)))
                  (log-interaction :info "provider-response"
@@ -779,7 +854,13 @@ visible even when the process is later killed."
                    (log-interaction :info "tool-call"
                                     :tool (or (getf tool-call :name) "unknown")
                                     :arguments (or (getf tool-call :arguments) "{}")
-                                    :round round))))
+                                    :round round))
+                 (emit-observer "provider-round-completed"
+                                :round round
+                                :model (or (completion-response-model response)
+                                           (completion-request-model current-request))
+                                :finish-reason (or (completion-response-finish-reason response)
+                                                   "unknown"))))
              (run-next-round (current-request round responses length-retries)
                (log-provider-request current-request round)
                (let ((start (get-internal-real-time)))
@@ -799,7 +880,19 @@ visible even when the process is later killed."
                                    (append (completion-request-messages current-request)
                                            (list (openrouter-assistant-tool-call-message response))
                                            (mapcar (lambda (tool-call)
-                                                     (openrouter-tool-result-message tool-call handlers))
+                                                     (emit-observer "tool-call-started"
+                                                                    :round round
+                                                                    :tool-call-id (getf tool-call :id)
+                                                                    :tool-name (getf tool-call :name)
+                                                                    :arguments (getf tool-call :arguments))
+                                                     (let ((tool-result
+                                                             (openrouter-tool-result-message tool-call handlers)))
+                                                       (emit-observer "tool-call-completed"
+                                                                      :round round
+                                                                      :tool-call-id (getf tool-call :id)
+                                                                      :tool-name (getf tool-call :name)
+                                                                      :result (getf tool-result :content))
+                                                       tool-result))
                                                    tool-calls)))
                                  (next-request
                                    (make-completion-request

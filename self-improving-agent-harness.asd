@@ -2,7 +2,7 @@
   :description "A Common Lisp harness for controlled self-improving agent experiments."
   :author "Paul Brower"
   :license "MIT"
-  :depends-on (#:drakma #:yason #:sb-posix)
+  :depends-on (#:drakma #:yason #:sb-posix #:clog)
   :serial t
   :components ((:file "src/package")
                (:file "src/backend")
@@ -16,6 +16,8 @@
                (:file "src/reload")
                (:file "src/subagent")
                (:file "src/chat-session")
+               (:file "src/web-session")
+               (:file "src/web-app")
                (:file "src/chat-turn-report")
                (:file "src/chat-cli")
                (:file "src/main"))
@@ -41,7 +43,8 @@
                (:file "tests/reload")
                (:file "tests/logging")
                (:file "tests/resume")
-               (:file "tests/subagent"))
+               (:file "tests/subagent")
+               (:file "tests/web-session"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call :self-improving-agent-harness/tests :run-tests)))

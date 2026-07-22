@@ -15,8 +15,9 @@ send EOF to leave.
 Interactive slash commands: /reload reloads harness sources in-process; /max-rounds [N] shows or sets the live tool-loop limit.
 Piped stdin remains a one-shot prompt and is never interpreted as a transcript.
 
--c, --continue resumes the most recent session: the latest
-agent-logs/*.history.json snapshot is reloaded as the starting conversation
+-c, --continue resumes the most recent session by default. Combine it with
+--session-id ID to resume that specific durable `agent-logs/ID.history.json`
+session; the snapshot is reloaded as the starting conversation
 (including tool calls and results), and the resumed turns append to that
 session's log files. The snapshot's model and max-rounds are adopted unless you
 also pass --model/--max-rounds. Errors (no snapshot) fall back to a fresh session.
@@ -76,6 +77,7 @@ USAGE
 }
 
 backend=openrouter
+backend_supplied=false
 codex_home=
 codex_home_supplied=false
 model=openai/gpt-4.1-mini
@@ -95,7 +97,7 @@ while [ "$#" -gt 0 ]; do
       continue_session=true; shift ;;
     --backend)
       [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --backend requires a value' >&2; exit 2; }
-      backend=$2; shift 2 ;;
+      backend=$2; backend_supplied=true; shift 2 ;;
     --codex-home)
       [ "$#" -ge 2 ] || { printf '%s\n' 'bin/chat: --codex-home requires a path' >&2; exit 2; }
       codex_home=$2; codex_home_supplied=true; shift 2 ;;
@@ -253,6 +255,7 @@ export HARNESS_CHAT_MAX_ROUNDS=$max_rounds
 export HARNESS_CHAT_SESSION_ID=$session_id
 # CLI --backend wins over any ambient HARNESS_BACKEND by exporting it here.
 export HARNESS_BACKEND=$backend
+export HARNESS_CHAT_BACKEND_EXPLICIT=$backend_supplied
 if [ -n "$container_codex_home" ]; then
   export CODEX_HOME=$container_codex_home
 fi
@@ -281,6 +284,7 @@ if [ "$mode" = interactive ]; then
     --env HARNESS_CHAT_STREAM_MODE \
     --env HARNESS_CHAT_FAKE_BACKEND \
     --env HARNESS_BACKEND \
+    --env HARNESS_CHAT_BACKEND_EXPLICIT \
     --env CODEX_HOME \
     --dynamic-space-size "$dynamic_space_mb" \
     --noinform \
@@ -297,6 +301,7 @@ exec "$container_runner" --writable-workspace \
   --env HARNESS_CHAT_RESUME \
   --env HARNESS_CHAT_FAKE_BACKEND \
   --env HARNESS_BACKEND \
+  --env HARNESS_CHAT_BACKEND_EXPLICIT \
   --env CODEX_HOME \
   --dynamic-space-size "$dynamic_space_mb" \
   --noinform \

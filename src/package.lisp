@@ -21,6 +21,7 @@
    #:read-session-history-snapshot
    #:read-session-snapshot-metadata
    #:most-recent-session-snapshot
+   #:list-session-snapshots
    #:log-interaction
    #:log-http-text
    #:*interaction-text-log-path*
@@ -66,6 +67,20 @@
    #:chat-session-turn
    #:chat-session-failed-turn-p
    #:note-chat-session-failure
+   ;; Browser UI session/event seam (issue #24)
+   #:web-session
+   #:make-web-session
+   #:web-session-id
+   #:web-session-run-session-id
+   #:web-session-chat-session
+   #:web-session-events
+   #:web-session-state
+   #:web-session-turn-number
+   #:web-session-record-event
+   #:web-event-visible-in-chat-log-p
+   #:web-session-submit
+   #:web-session-clear
+   #:run-web-server
    #:completion-request
    #:make-completion-request
    #:completion-request-model
