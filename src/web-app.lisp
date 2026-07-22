@@ -147,8 +147,10 @@
          (durable-session-id (web-mark (clog:create-div controls :content "") "durable-session-id"))
          (workspace (web-style (clog:create-div root :class "workspace") "flex:1;min-height:0;display:flex;flex-wrap:wrap;align-content:flex-start;gap:12px"))
          (sidebar (web-style (clog:create-div workspace :class "session-sidebar") "width:240px;max-width:100%;flex:1 1 220px;overflow-y:auto;padding:10px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;box-sizing:border-box"))
-         (sidebar-title (clog:create-div sidebar :content "Previous sessions"))
-         (session-list (web-mark (clog:create-div sidebar :class "session-list") "session-list"))
+         (sidebar-title (web-mark (web-style (clog:create-div sidebar :content "▸ Previous sessions")
+                                             "width:100%;font-weight:600;padding:6px 8px;cursor:pointer;box-sizing:border-box;user-select:none")
+                                   "sidebar-toggle"))
+         (session-list (web-mark (web-style (clog:create-div sidebar :class "session-list") "display:none") "session-list"))
          (conversation (web-style (clog:create-div workspace :class "conversation") "flex:999 1 360px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:10px"))
          (chat-log (web-mark (web-style (clog:create-div conversation :class "chat-log") "flex:1;min-height:0;max-height:65vh;max-height:65dvh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;box-sizing:border-box") "chat-log"))
          (composer-row (web-style (clog:create-div conversation :class "composer-row") "display:flex;flex-wrap:wrap;gap:8px;align-items:stretch"))
@@ -156,8 +158,9 @@
          (send (web-mark (web-style (clog:create-button composer-row :content "Send") "flex:1 1 92px;min-width:92px;min-height:54px;font:inherit") "send-turn"))
          (session nil)
          (rendered-sequence 0)
-         (request-in-progress-p nil))
-    (declare (ignore heading run-label run-id browser-label durable-label sidebar-title backend-label model-label))
+         (request-in-progress-p nil)
+         (sessions-collapsed-p t))
+    (declare (ignore heading run-label run-id browser-label durable-label backend-label model-label))
     (setf (clog:value backend-input) "synthetic"
           (clog:value model-input) "syn:large:text")
     (setf (clog:attribute composer "placeholder") "Enter a prompt")
@@ -195,8 +198,20 @@
                                 (web-mark (clog:create-button session-list :content (web-session-summary candidate))
                                           (format nil "saved-session-~A" (web-session-id candidate)))
                                 "display:block;width:100%;margin:6px 0;padding:8px;text-align:left;font-family:ui-monospace,monospace")))
-                   (clog:set-on-click button (lambda (obj) (declare (ignore obj)) (load-session candidate)))))))
+                   (clog:set-on-click button (lambda (obj) (declare (ignore obj)) (load-session candidate))))))
+             (render-sidebar-toggle ()
+               (setf (clog:inner-html sidebar-title)
+                     (if sessions-collapsed-p "▸ Previous sessions" "▾ Previous sessions"))
+               (setf (clog:attribute session-list "style")
+                     (if sessions-collapsed-p "display:none" "display:block"))))
       (render-session-list)
+      (render-sidebar-toggle)
+      (clog:set-on-click
+       sidebar-title
+       (lambda (obj)
+         (declare (ignore obj))
+         (setf sessions-collapsed-p (not sessions-collapsed-p))
+         (render-sidebar-toggle)))
       (clog:set-on-click
        start
        (lambda (obj)
@@ -250,8 +265,49 @@
   (setf *web-run-session-id* run-session-id
         *web-fake-scenario* fake-scenario
         *web-log-directory* log-directory)
-  (clog:initialize #'web-on-new-window :host host :port port)
+  ;; Register a thin indirection so reload_harness can redefine
+  ;; WEB-ON-NEW-WINDOW and have new browser connections pick up the
+  ;; updated code without restarting the CLOG server. CLOG stores the
+  ;; function object passed to INITIALIZE; a bare #'WEB-ON-NEW-WINDOW
+  ;; would snapshot the function that existed at startup time and keep
+  ;; calling the old one after a reload. The lambda resolves the symbol
+  ;; on every connection, so it always calls the current definition.
+  (clog:initialize (lambda (body) (web-on-new-window body))
+                   :host host :port port)
+  ;; After a successful reload_harness, re-register the on-new-window
+  ;; handler so CLOG drops any function object it snapshotted at startup
+  ;; and dispatches new connections through the lambda indirection above
+  ;; (which resolves the current WEB-ON-NEW-WINDOW). This is a no-op for
+  ;; the lambda case but is essential when the server was started with a
+  ;; bare #'WEB-ON-NEW-WINDOW before this indirection existed.
+  (add-post-reload-hook
+   (lambda ()
+     (when (clog:is-running-p)
+       (clog:set-on-new-window (lambda (body) (web-on-new-window body))
+                               :path "/"))))
   (format t "WEB_READY url=http://127.0.0.1:~D/ run_session_id=~A~%"
           port (or run-session-id "none"))
   (finish-output)
   (loop (sleep 60)))
+
+;;; Reload-time re-registration for an already-running CLOG server.
+;;;
+;;; run-web-server registers a post-reload hook, but only when it executes.
+;;; When reload_harness LOADs this file into an image where the CLOG server
+;;; is already running (the normal case: PID 7 started scripts/web.lisp and
+;;; is now in its sleep loop), that registration never happened. This
+;;; top-level form runs at LOAD time and, if CLOG is up, immediately
+;;; re-points the on-new-window handler at the current WEB-ON-NEW-WINDOW
+;;; and registers the hook so future reloads keep it current.
+(when (and (find-package :clog)
+           (fboundp (intern "IS-RUNNING-P" :clog))
+           (funcall (intern "IS-RUNNING-P" :clog)))
+  (funcall (intern "SET-ON-NEW-WINDOW" :clog)
+           (lambda (body) (web-on-new-window body))
+           :path "/")
+  (add-post-reload-hook
+   (lambda ()
+     (when (funcall (intern "IS-RUNNING-P" :clog))
+       (funcall (intern "SET-ON-NEW-WINDOW" :clog)
+                (lambda (body) (web-on-new-window body))
+                :path "/")))))
