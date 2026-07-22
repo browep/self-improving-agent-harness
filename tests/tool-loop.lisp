@@ -203,9 +203,12 @@ still going"
       (ensure-true (search "TOOL_ERROR: Truncated text tool call"
                            (getf tool-message :content))
                    "truncated recovery returns an explicit non-execution error")
-      (ensure-true (search "native tools/tool_calls"
+      (ensure-true (search "native tool_calls"
                            (getf tool-message :content))
-                   "truncated recovery tells the model to use native tool_calls")))
+                   "truncated recovery tells the model to use native tool_calls")
+      (ensure-true (search "{\"command\":\"pwd\"}"
+                           (getf tool-message :content))
+                   "truncated recovery gives run_shell's expected JSON arguments example")))
 (let* ((handler-arguments nil)
          (native-response
            (make-completion-response

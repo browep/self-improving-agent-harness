@@ -669,7 +669,7 @@ the tool loop can return an error without executing a handler."
                               "{}"
                               :recovery :truncated
                               :synthetic-result
-                              "TOOL_ERROR: Truncated or malformed text tool call was not executed. Use the native tools/tool_calls API (not <tool_call> XML). If the command is large, split it into smaller run_shell calls.")
+                              "TOOL_ERROR: Truncated or malformed text tool call was not executed. Use the native tools/tool_calls API, not <tool_call> XML. For run_shell, call function name run_shell with JSON arguments {\"command\":\"pwd\"}; do not put arguments in markup.")
                              calls)
                        (return))
                      (let* ((close (search "</tool_call>" text
@@ -697,8 +697,8 @@ the tool loop can return an error without executing a handler."
                                  :recovery :truncated
                                  :synthetic-result
                                  (format nil
-                                         "TOOL_ERROR: Truncated text tool call for ~A was not executed (incomplete <tool_call> markup or finish_reason=length). Retry with the native tools/tool_calls API and a smaller command payload."
-                                         name))
+                                         "TOOL_ERROR: Truncated text tool call for ~A was not executed (incomplete <tool_call> markup or finish_reason=length). Retry using native tool_calls: function name ~A with a JSON arguments object (for run_shell: {\"command\":\"pwd\"}), never XML markup."
+                                         name name))
                                 calls)
                           (return))
                          (t
