@@ -556,7 +556,31 @@ the round without changing the COMPLETE generic-function signature.")
 (defun text-embedded-tool-call-prefix-p (text)
   "Return true when TEXT appears to contain an XML-ish embedded tool call."
   (and (stringp text)
-       (search "<tool_call>" text :test #'char-equal)))
+       (or (search "<tool_call>" text :test #'char-equal)
+           (search "<|tool_call_begin|>" text))))
+
+(defun parse-kimi-text-tool-calls (text)
+  "Recover complete Kimi sentinel tool markup without guessing arguments.
+
+Accepted shape: <|tool_call_begin|>functions.NAME:INDEX
+<|tool_call_argument_begin|>JSON<|tool_call_end|>.  JSON remains subject to
+normal tool schema validation before execution."
+  (let ((begin (search "<|tool_call_begin|>" text))
+        (section (search "<|tool_calls_section_begin|>" text)))
+    (when begin
+      (let* ((name-start (+ begin (length "<|tool_call_begin|>")))
+             (argument-marker (or (search "<|tool_call_argument_begin|>" text :start2 name-start) -1))
+             (end (and (>= argument-marker 0) (search "<|tool_call_end|>" text :start2 (+ argument-marker (length "<|tool_call_argument_begin|>")))))
+             (raw-name (and (>= argument-marker 0) (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq text name-start argument-marker))))
+             (name (and raw-name (let* ((without-prefix (if (and (>= (length raw-name) 10) (string-equal "functions." raw-name :end2 10)) (subseq raw-name 10) raw-name))
+                                        (colon (position #\: without-prefix)))
+                                   (if colon (subseq without-prefix 0 colon) without-prefix))))
+             (argument-start (+ argument-marker (length "<|tool_call_argument_begin|>")))
+             (arguments (and end (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq text argument-start end)))))
+        (when (and name end arguments (plusp (length arguments)) (char= (char arguments 0) #\{))
+          (values (list (make-recovered-tool-call name arguments :recovery :kimi-sentinel))
+                  (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq text 0 (or section begin)))
+                  :kimi-sentinel))))))
 
 (defun parse-text-embedded-tool-call-arguments (body)
   "Parse zero or more <arg_key>/<arg_value> pairs from BODY into an alist.
@@ -731,7 +755,9 @@ executes a handler; it becomes a synthetic error tool result."
        response)
       (t
        (multiple-value-bind (calls leading status)
-           (parse-text-embedded-tool-calls text)
+           (if (search "<|tool_call_begin|>" text)
+               (parse-kimi-text-tool-calls text)
+               (parse-text-embedded-tool-calls text))
          (if (null calls)
              response
              (progn

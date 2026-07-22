@@ -168,6 +168,16 @@
                   "controlled malformed recovery preserves the requested tool")
     (ensure-equal "{\"command\":\"pwd\"}" (getf (first calls) :arguments)
                   "controlled malformed recovery extracts only the explicit quoted command"))
+  ;; Kimi's sentinel dialect is complete structured text, not XML; preserve JSON for normal validation.
+  (multiple-value-bind (calls leading status)
+      (self-improving-agent-harness::parse-kimi-text-tool-calls
+       "I'll inspect.<|tool_calls_section_begin|><|tool_call_begin|>functions.run_shell:0<|tool_call_argument_begin|>{\"command\":\"pwd\",\"description\":\"working directory\"}<|tool_call_end|><|tool_calls_section_end|>")
+    (ensure-equal :kimi-sentinel status "Kimi sentinel parser identifies its recovery dialect")
+    (ensure-equal "I'll inspect." leading "Kimi sentinel parser retains leading assistant text")
+    (ensure-equal "run_shell" (getf (first calls) :name) "Kimi sentinel parser maps functions.run_shell to run_shell")
+    (ensure-equal "{\"command\":\"pwd\",\"description\":\"working directory\"}" (getf (first calls) :arguments)
+                  "Kimi sentinel parser preserves its JSON argument object"))
+
 (let* ((handler-called nil)
          (truncated-response
            (make-completion-response
