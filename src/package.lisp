@@ -81,6 +81,22 @@
    #:web-session-submit
    #:web-session-clear
    #:run-web-server
+   ;; Browser tooling (Playwright bridge)
+   #:make-playwright-bridge
+   #:pw-call
+   #:pw-close
+   #:pw-send
+   #:pw-alive-p
+   #:with-playwright-bridge
+   #:*playwright-bridge*
+   #:browser-open-tool
+   #:browser-click-tool
+   #:browser-type-tool
+   #:browser-get-text-tool
+   #:browser-eval-tool
+   #:browser-screenshot-tool
+   #:browser-assert-tool
+   #:browser-close-tool
    #:completion-request
    #:make-completion-request
    #:completion-request-model
