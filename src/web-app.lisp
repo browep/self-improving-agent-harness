@@ -123,7 +123,7 @@
 (defun web-on-new-window (body)
   (setf (clog:title (clog:html-document body)) "Self-improving Agent Harness")
   (let* ((root (web-style (clog:create-div body :class "harness-web")
-                          "min-height:100vh;box-sizing:border-box;padding:clamp(10px,2vw,18px);display:flex;flex-direction:column;gap:12px;font-family:system-ui,sans-serif;background:#fff;color:#0f172a;overflow-x:hidden"))
+                          "min-height:100vh;min-height:100dvh;box-sizing:border-box;padding:clamp(10px,2vw,18px);display:flex;flex-direction:column;gap:12px;font-family:system-ui,sans-serif;background:#fff;color:#0f172a;overflow-x:hidden"))
          (controls (web-style (clog:create-div root :class "session-controls")
                               "display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding-bottom:12px;border-bottom:1px solid #cbd5e1"))
          (heading (clog:create-section controls :h1 :content "Harness chat"))
@@ -145,12 +145,13 @@
          (sidebar-title (clog:create-div sidebar :content "Previous sessions"))
          (session-list (web-mark (clog:create-div sidebar :class "session-list") "session-list"))
          (conversation (web-style (clog:create-div workspace :class "conversation") "flex:999 1 360px;min-width:0;display:flex;flex-direction:column;gap:10px"))
-         (chat-log (web-mark (web-style (clog:create-div conversation :class "chat-log") "flex:1;min-height:280px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;box-sizing:border-box") "chat-log"))
+         (chat-log (web-mark (web-style (clog:create-div conversation :class "chat-log") "flex:1;min-height:280px;max-height:65vh;max-height:65dvh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;box-sizing:border-box") "chat-log"))
          (composer-row (web-style (clog:create-div conversation :class "composer-row") "display:flex;flex-wrap:wrap;gap:8px;align-items:stretch"))
          (composer (web-mark (web-style (clog:create-form-element composer-row :textarea) "flex:1 1 240px;min-height:54px;resize:vertical;padding:10px;font:inherit;box-sizing:border-box") "prompt-composer"))
          (send (web-mark (web-style (clog:create-button composer-row :content "Send") "flex:1 1 92px;min-width:92px;min-height:54px;font:inherit") "send-turn"))
          (session nil)
-         (rendered-sequence 0))
+         (rendered-sequence 0)
+         (request-in-progress-p nil))
     (declare (ignore heading run-label run-id browser-label durable-label sidebar-title backend-label model-label))
     (setf (clog:value backend-input) "synthetic"
           (clog:value model-input) "syn:large:text")
@@ -158,10 +159,12 @@
     (setf (clog:disabledp send) t)
     (labels ((render-active-session ()
                (setf (clog:inner-html chat-log) ""
-                     (clog:inner-html state) (if session "ready" "not started")
+                     (clog:inner-html state) (cond (request-in-progress-p "Request in progress — waiting for provider response (up to 120 seconds)…")
+                                                   (session "ready")
+                                                   (t "not started"))
                      (clog:inner-html session-id) (if session (web-session-id session) "")
                      (clog:inner-html durable-session-id) (if session (web-session-durable-session-id session) "")
-                     (clog:disabledp send) (null session)
+                     (clog:disabledp send) (or (null session) request-in-progress-p)
                      (clog:value composer) ""
                      (clog:value backend-input) (if session (backend-name (chat-session-backend (web-session-chat-session session))) "synthetic")
                      (clog:value model-input) (if session (chat-session-model (web-session-chat-session session)) "syn:large:text"))
@@ -198,14 +201,24 @@
        send
        (lambda (obj)
          (declare (ignore obj))
-         (when session
-           (web-session-submit session (clog:value composer))
-           (setf (clog:value composer) "")
-           (dolist (event (web-session-events session))
-             (when (> (getf event :sequence) rendered-sequence)
-               (web-render-chat-message chat-log event)))
-           (setf rendered-sequence (length (web-session-events session)))
-           (render-session-list))))
+         (when (and session (not request-in-progress-p))
+           ;; Mutate the browser immediately before entering the synchronous server-side
+           ;; provider/tool loop, so a slow provider no longer looks like a dead Send click.
+           (setf request-in-progress-p t
+                 (clog:inner-html state) "Request in progress — waiting for provider response (up to 120 seconds)…"
+                 (clog:disabledp send) t)
+           (unwind-protect
+                (progn
+                  (web-session-submit session (clog:value composer))
+                  (setf (clog:value composer) "")
+                  (dolist (event (web-session-events session))
+                    (when (> (getf event :sequence) rendered-sequence)
+                      (web-render-chat-message chat-log event)))
+                  (setf rendered-sequence (length (web-session-events session)))
+                  (render-session-list))
+             (setf request-in-progress-p nil
+                   (clog:inner-html state) "ready"
+                   (clog:disabledp send) nil)))))
       (clog:set-on-click
        clear
        (lambda (obj)
