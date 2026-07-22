@@ -48,14 +48,19 @@ send handler checks this after the turn completes and triggers the refresh.")
           :handlers 'chat-handlers)))))
 
 (defun web-known-sessions (&key (refresh t))
-  "Return durable sessions newest-first, including CLI-created snapshots."
+  "Return durable sessions newest-first, including CLI-created snapshots.
+
+Sessions are sorted by durable-session-id (an ISO-8601 UTC timestamp) in
+descending lexical order so the latest session appears at the top regardless
+of registration order."
   (when refresh
     (dolist (descriptor (or (list-session-snapshots *web-log-directory*) '()))
       (web-load-durable-session descriptor)))
-  (remove nil (mapcar (lambda (id) (gethash id *web-sessions*)) *web-session-order*)))
+  (sort (remove nil (mapcar (lambda (id) (gethash id *web-sessions*)) *web-session-order*))
+        #'string> :key #'web-session-durable-session-id))
 
 (defun web-session-summary (session)
-  (format nil "~A · ~D turn~:P" (subseq (web-session-durable-session-id session) 0 8)
+  (format nil "~A · ~D turn~:P" (web-session-durable-session-id session)
           (web-session-turn-number session)))
 
 (defclass web-fake-backend (backend)
@@ -160,6 +165,40 @@ send handler checks this after the turn completes and triggers the refresh.")
             (clog:create-div item :content (web-html-escape text))))
       item)))
 
+(defun web-render-context-line (chat-log session start-time)
+  "Render a context details line after an assistant message, mirroring the CLI.
+
+Shows model, provider rounds, turn duration, history message count, and the
+token/context-window fill suffix that the CLI prints as <<< DONE."
+  (let* ((chat (web-session-chat-session session))
+         (rounds (length (chat-session-last-provider-responses chat)))
+         (duration (elapsed-seconds-since start-time))
+         (model (chat-session-model chat))
+         (history-count (length (chat-session-history chat)))
+         (backend (chat-session-backend chat))
+         (accounting (chat-session-last-accounting chat))
+         (suffix (format-context-fill-suffix backend model accounting))
+         (base (format nil "model=~A  rounds=~D  duration_seconds=~,3F  history=~D messages"
+                       model rounds duration history-count))
+         (text (if (and suffix (plusp (length suffix)))
+                   (format nil "~A  ~A" base suffix)
+                   base))
+         (item (web-style (clog:create-div chat-log :class "context-line" :content text)
+                          "width:100%;padding:4px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:0.8rem;color:#94a3b8;border-top:1px solid #e2e8f0")))
+    (declare (ignore item))))
+
+(defun web-clear-thinking-indicator (body indicator)
+  "Stop the live thinking timer and remove the indicator element from the DOM.
+
+Clears the window.__harnessThinkingTimer interval and destroys the INDICATOR
+CLOG element. Uses a single-line JS string (no FORMAT line-continuation tildes)
+so the cleanup is always valid JavaScript and the indicator never lingers
+after a turn completes."
+  (clog:js-execute body
+                   "if(window.__harnessThinkingTimer){clearInterval(window.__harnessThinkingTimer);window.__harnessThinkingTimer=null;}")
+  (when indicator
+    (clog:destroy indicator)))
+
 (defun web-on-new-window (body)
   (setf (clog:title (clog:html-document body)) "Self-improving Agent Harness")
   (clog:js-execute body
@@ -242,7 +281,11 @@ send handler checks this after the turn completes and triggers the refresh.")
                          "")))
              (load-session (selected)
                (setf session selected)
-               (render-active-session))
+               (render-active-session)
+               ;; Collapse the previous-sessions list after selecting one so
+               ;; the conversation gets the full sidebar space.
+               (setf sessions-collapsed-p t)
+               (render-sidebar-toggle))
              (render-session-list ()
                (setf (clog:inner-html session-list) "")
                (dolist (candidate (web-known-sessions))
@@ -293,7 +336,8 @@ send handler checks this after the turn completes and triggers the refresh.")
        (lambda (obj)
          (declare (ignore obj))
          (when (and session (not request-in-progress-p))
-           (let ((text (clog:value composer)))
+           (let ((text (clog:value composer))
+                 (turn-start (get-internal-real-time)))
              ;; Mutate the browser immediately before entering the synchronous
              ;; server-side provider/tool loop, so a slow provider no longer
              ;; looks like a dead Send click.
@@ -317,29 +361,53 @@ send handler checks this after the turn completes and triggers the refresh.")
                                   (format nil "~A.scrollTop = ~A.scrollHeight;"
                                           (clog:script-id chat-log)
                                           (clog:script-id chat-log)))))
-             (unwind-protect
-                  (progn
-                    (web-session-submit session text)
-                    (dolist (event (web-session-events session))
-                      (when (> (getf event :sequence) rendered-sequence)
-                        (web-render-chat-message chat-log event)))
-                    (setf rendered-sequence (length (web-session-events session)))
-                    (render-session-list)
-                    ;; Scroll to bottom again after the full turn completes so
-                    ;; the assistant response is visible.
-                    (clog:js-execute chat-log
-                                     (format nil "~A.scrollTop = ~A.scrollHeight;"
-                                             (clog:script-id chat-log)
-                                             (clog:script-id chat-log))))
-               (setf request-in-progress-p nil
-                     *web-turn-in-progress-p* nil
-                     (clog:inner-html state) "ready"
-                     (clog:disabledp send) nil)
-               ;; If reload_harness was called during this turn, the browser
-               ;; refresh was deferred until now so the final assistant message
-               ;; is already in the session events before the tab reconnects.
-               (when *web-browser-reload-pending-p*
-                 (web-reload-browsers)))))))
+             ;; Add a live "thinking" indicator in the chat log that shows
+             ;; elapsed inference time via a JS interval timer. The timer id
+             ;; is stored on the window object so we can clear it when the
+             ;; turn completes. Rendered as subtle grey text, not a card.
+             ;; The INDICATOR binding wraps the UNWIND-PROTECT so the cleanup
+             ;; form can destroy the same CLOG element by reference.
+             (let ((indicator (web-style (clog:create-div chat-log :class "thinking-indicator"
+                                                          :content "Thinking… 0.0s")
+                                         "width:100%;padding:2px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:0.85rem;color:#94a3b8;box-sizing:border-box")))
+               (clog:js-execute body
+                                (format nil
+                                         "window.__harnessThinkingStart=Date.now();~
+                                          window.__harnessThinkingTimer=setInterval(function(){~
+                                            var el=~A;~
+                                            if(el){var s=((Date.now()-window.__harnessThinkingStart)/1000).toFixed(1);~
+                                            el.textContent='Thinking\u2026 '+s+'s';}~
+                                          },100);"
+                                         (clog:script-id indicator)))
+               (unwind-protect
+                    (progn
+                      (web-session-submit session text)
+                      (dolist (event (web-session-events session))
+                        (when (> (getf event :sequence) rendered-sequence)
+                          (web-render-chat-message chat-log event)))
+                      (setf rendered-sequence (length (web-session-events session)))
+                      (render-session-list)
+                      ;; Clear the thinking indicator timer and remove the element.
+                      (web-clear-thinking-indicator body indicator)
+                      ;; Show a context details line after the assistant message,
+                      ;; mirroring the CLI's <<< DONE outcome line.
+                      (web-render-context-line chat-log session turn-start)
+                      ;; Scroll to bottom again after the full turn completes so
+                      ;; the assistant response is visible.
+                      (clog:js-execute chat-log
+                                       (format nil "~A.scrollTop = ~A.scrollHeight;"
+                                               (clog:script-id chat-log)
+                                               (clog:script-id chat-log))))
+                 (web-clear-thinking-indicator body indicator)
+                 (setf request-in-progress-p nil
+                       *web-turn-in-progress-p* nil
+                       (clog:inner-html state) "ready"
+                       (clog:disabledp send) nil)
+                 ;; If reload_harness was called during this turn, the browser
+                 ;; refresh was deferred until now so the final assistant message
+                 ;; is already in the session events before the tab reconnects.
+                 (when *web-browser-reload-pending-p*
+                   (web-reload-browsers))))))))
       (clog:set-on-click
        clear
        (lambda (obj)

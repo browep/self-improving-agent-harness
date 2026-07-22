@@ -345,6 +345,79 @@ API instead of copying an old display name or relying on an alias. Then run:
 ./bin/chat --model openai/gpt-4.1-mini
 ```
 
+## Browser tooling (issues #37–#43)
+
+The harness exposes a set of `browser_*` tools that let an agent drive a real
+headless Chromium through [Playwright](https://playwright.dev/). They are
+implemented as a three-layer stack under `src/tooling/browser/`:
+
+- `playwright-bridge.js` — a long-running Node process that wraps the Playwright
+  API and speaks line-delimited JSON-RPC over piped stdio. This is the GENERIC
+  browser engine layer: no app-specific knowledge.
+- `playwright-bridge.lisp` — the Lisp transport. It spawns the Node subprocess,
+  frames requests/responses, and exposes `pw-call`/`pw-close` plus a
+  `with-playwright-bridge` cleanup macro.
+- `browser-tool.lisp` — the agent-facing `browser_*` tool handlers
+  (`browser_open`, `browser_click`, `browser_type`, `browser_get_text`,
+  `browser_eval`, `browser_screenshot`, `browser_assert`, `browser_close`).
+  A persistent bridge is kept in the module-global `*playwright-bridge*` so the
+  page stays warm across calls; `browser_open` lazily starts it and
+  `browser_close` tears it down. An `sb-ext:*exit-hooks*` entry ensures the
+  subprocess is reaped even if the image exits without an explicit close.
+
+The generic layers know nothing about this harness's UI. App-specific tooling
+lives in its own subdirectory: `harness-web-ui/` holds the CLOG web UI helpers
+(`harness-web-ui-open`, `-start-session`, `-send-prompt`, `-assert-chat-log-contains`,
+`-get-run-id`, `-screenshot`, `-close`) plus the `data-testid` selector table
+that must stay in sync with the `WEB-MARK` calls in `src/web-app.lisp`.
+
+**To add tooling for a new web app**, create a new subdirectory under
+`src/tooling/browser/` (e.g. `src/tooling/browser/my-app/`) with its own
+`*-tool.lisp` that imports the generic `browser_*` handlers and supplies the
+app's default URL, selectors, and composite verification flows. Add the file to
+`self-improving-agent-harness.asd` after `browser-tool`. Keep the generic layers
+free of app-specific assumptions.
+
+A few runtime parameters are configurable and reload-friendly (redefine them at
+the REPL to change the defaults for subsequent calls): `*browser-default-url*`,
+`*browser-default-timeout*` (seconds, forwarded to Playwright as ms), and
+`*browser-default-screenshot-path*` (defaults to `./docs-tmp/browser-screenshot.png`). Browser screenshots and videos are saved to `./docs-tmp/` by default; this directory is gitignored and is the expected location for browser-generated artifacts.
+
+### Verification artifact bundle
+
+`tests/tooling/browser/harness-web-ui/harness-web-ui-integration.lisp` is a
+STANDALONE integration test (not part of `RUN-TESTS`) that drives the real CLOG
+web UI end-to-end and writes a per-run artifact bundle under
+`/tmp/browser-verify/<run-id>/`:
+
+- `01-initial-load.png`, `02-after-start-session.png`, `03-after-send.png` —
+  full-page screenshots at each step.
+- `dom-snapshots.json` — per-step `textContent` of the key `data-testid`
+  elements.
+- `console.log` — captured browser console / page-error messages.
+- `manifest.json` — machine-readable run metadata, steps, assertions,
+  screenshots, and console messages (`schema:
+  self-improving-agent-harness/browser-verify/v1`).
+
+### Running the integration test
+
+It needs a live CLOG server (start it with `scripts/web.lisp`, serving
+`http://localhost:18080/`) and a headless Chromium (baked into the Docker
+image). Then:
+
+```bash
+sbcl --noinform --non-interactive \
+  --load /opt/quicklisp/setup.lisp \
+  --eval '(asdf:load-asd "/workspace/self-improving-agent-harness.asd")' \
+  --eval '(asdf:load-system :self-improving-agent-harness)' \
+  --load tests/tooling/browser/harness-web-ui/harness-web-ui-integration.lisp \
+  --eval '(self-improving-agent-harness/tests:run-browser-verification-test)'
+```
+
+It returns `(VALUES PASS-P BUNDLE-DIR)`; assertion failures are recorded in the
+manifest and reflected in `PASS-P` rather than raised, so a partial run still
+yields evidence.
+
 ## Repository layout
 
 - `src/` — Common Lisp packages, backend protocol, and harness entry point.

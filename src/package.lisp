@@ -81,6 +81,38 @@
    #:web-session-submit
    #:web-session-clear
    #:run-web-server
+   ;; Browser tooling (Playwright bridge)
+   #:make-playwright-bridge
+   #:pw-call
+   #:pw-close
+   #:pw-send
+   #:pw-alive-p
+   #:with-playwright-bridge
+   #:*playwright-bridge*
+   #:*browser-default-url*
+   #:*browser-default-timeout*
+   #:*browser-default-screenshot-path*
+   #:*browser-default-video-path*
+   #:browser-open-tool
+   #:browser-click-tool
+   #:browser-type-tool
+   #:browser-get-text-tool
+   #:browser-eval-tool
+   #:browser-screenshot-tool
+   #:browser-video-tool
+   #:browser-assert-tool
+   #:browser-close-tool
+   ;; Harness CLOG web UI browser tooling (issue #41)
+   #:*harness-web-ui-url*
+   #:*harness-web-ui-testids*
+   #:harness-web-ui-selector
+   #:harness-web-ui-open
+   #:harness-web-ui-start-session
+   #:harness-web-ui-send-prompt
+   #:harness-web-ui-assert-chat-log-contains
+   #:harness-web-ui-get-run-id
+   #:harness-web-ui-screenshot
+   #:harness-web-ui-close
    #:completion-request
    #:make-completion-request
    #:completion-request-model

@@ -116,6 +116,21 @@
                  "request JSON serializes tool definitions")
     (ensure-true (search "\"name\":\"echo\"" json)
                  "request JSON serializes the declared tool name"))
+  ;; OpenAI-compatible function schemas require REQUIRED to be an array when
+  ;; present. YASON otherwise serializes a Lisp empty list as JSON null, which
+  ;; Synthetic rejects once the browser_open schema is advertised.
+  (let* ((request (make-completion-request
+                   :model "test/model"
+                   :messages '((:role "user" :content "Do not call tools."))
+                   :options
+                   '(:tools ((:type "function"
+                              :function (:name "browser_open"
+                                         :parameters (:type "object"
+                                                      :properties (:url (:type "string"))
+                                                      :required ())))))))
+         (json (self-improving-agent-harness::openrouter-request-json request)))
+    (ensure-true (search "\"required\":[]" json)
+                 "an empty tool required list serializes as JSON [] rather than null"))
   (let* ((em-dash (string (code-char #x2014)))
          (request (make-completion-request
                    :model "test/model"

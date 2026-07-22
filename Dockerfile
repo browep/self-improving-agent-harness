@@ -41,6 +41,25 @@ RUN npm install --global --no-fund --no-audit "@openai/codex@${CODEX_CLI_VERSION
     && codex --version \
     && npm cache clean --force
 
+# Headless Chromium (Playwright) for driving the CLOG web UI from inside the
+# container (e.g. browser-driven smoke tests / screenshots). Only the
+# chromium-headless-shell is installed (--only-shell): the harness launches
+# headless only, so the full ~379M chromium bundle is unnecessary.
+#
+# Version is pinned to match package.json's "playwright" dependency
+# (^1.61.1 -> 1.61.1); the browser build number is derived from that version
+# (chromium-1228). Bump both together deliberately.
+#
+# Browsers are installed under /opt/ms-playwright (set via PLAYWRIGHT_BROWSERS_PATH
+# below) rather than the XDG default /cache, because bin/container mounts the
+# self-improving-agent-harness-cache named volume at /cache at runtime and would
+# shadow anything baked there. --with-deps installs the OS shared libraries
+# (libnss3, libatk, libcairo, libgbm, ...) in the same apt pass.
+ARG PLAYWRIGHT_VERSION=1.61.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npx --yes playwright@${PLAYWRIGHT_VERSION} install --with-deps --only-shell chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 
 # Source is mounted read-only at runtime; compiled FASLs live in this named-volume path.

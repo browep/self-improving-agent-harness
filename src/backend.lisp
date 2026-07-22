@@ -128,7 +128,12 @@ trips as the intended escape rather than an invalid raw byte."
      (let ((object (make-hash-table :test #'equal)))
        (loop for (key item) on value by #'cddr
              do (setf (gethash (openrouter-json-name key) object)
-                      (openrouter-json-value item)))
+                      ;; JSON Schema requires a present `required` member to be
+                      ;; an array. YASON encodes Lisp NIL as null, so represent
+                      ;; an explicitly empty required list as an empty vector.
+                      (if (and (eq key :required) (null item))
+                          #()
+                          (openrouter-json-value item))))
        object))
     ((listp value) (mapcar #'openrouter-json-value value))
     ((stringp value) (sanitize-json-control-characters value))

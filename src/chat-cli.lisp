@@ -94,7 +94,53 @@ designator path.")
                                                        :description "Maximum tool-loop rounds for the subagent. Defaults to 20.")
                                           :timeout (:type "number"
                                                     :description "Wall-clock timeout for the whole subagent run in seconds. Defaults to 300. On expiry the subagent is terminated and a timeout error is delivered."))
-                             :required ("prompt"))))))
+                             :required ("prompt"))))
+    (:type "function" :function (:name "browser_open"
+                :description "Open a browser and navigate to a URL (default http://localhost:18080/). Optionally wait for a CSS selector to appear. The browser stays open across tool calls until browser_close."
+                :parameters (:type "object"
+                             :properties (:url (:type "string" :description "URL to navigate to. Defaults to http://localhost:18080/")
+                                          :wait_for (:type "string" :description "CSS selector to wait for after navigation"))
+                             :required ())))
+    (:type "function" :function (:name "browser_click"
+                :description "Click an element in the browser by CSS selector."
+                :parameters (:type "object"
+                             :properties (:selector (:type "string" :description "CSS selector to click"))
+                             :required ("selector"))))
+    (:type "function" :function (:name "browser_type"
+                :description "Type text into an input element by CSS selector."
+                :parameters (:type "object"
+                             :properties (:selector (:type "string" :description "CSS selector of the input/textarea")
+                                          :value (:type "string" :description "Text to type"))
+                             :required ("selector" "value"))))
+    (:type "function" :function (:name "browser_get_text"
+                :description "Read the text content of an element by CSS selector."
+                :parameters (:type "object"
+                             :properties (:selector (:type "string" :description "CSS selector to read text from"))
+                             :required ("selector"))))
+    (:type "function" :function (:name "browser_eval"
+                :description "Evaluate arbitrary JavaScript in the browser page and return the result. Escape hatch for anything the declarative tools don't cover."
+                :parameters (:type "object"
+                             :properties (:expression (:type "string" :description "JavaScript expression to evaluate"))
+                             :required ("expression"))))
+    (:type "function" :function (:name "browser_screenshot"
+                :description "Take a full-page screenshot and save it to a file."
+                :parameters (:type "object"
+                             :properties (:path (:type "string" :description "File path to save the screenshot. Defaults to ./docs-tmp/browser-screenshot.png"))
+                             :required ())))
+    (:type "function" :function (:name "browser_video"
+                :description "Save the recorded browser video to a WebM file. The browser records video continuously from browser_open; this method finalizes and saves the recording. The page is re-opened after saving, so call browser_open to navigate again."
+                :parameters (:type "object"
+                             :properties (:path (:type "string" :description "File path to save the video (.webm). Defaults to ./docs-tmp/browser-video.webm"))
+                             :required ())))
+    (:type "function" :function (:name "browser_assert"
+                :description "Assert a JavaScript expression is truthy in the browser page. Returns pass/fail with the value."
+                :parameters (:type "object"
+                             :properties (:expression (:type "string" :description "JavaScript boolean expression to assert"))
+                             :required ("expression"))))
+    (:type "function" :function (:name "browser_close"
+                :description "Close the browser and release the Playwright bridge process."
+                :parameters (:type "object")))))
+
 
 (defun chat-options ()
   (list :temperature 0.2
@@ -111,7 +157,16 @@ visible to the already-running interactive session."
   '(("run_shell" . shell-tool)
     ("web_search" . web-search-tool)
     ("reload_harness" . reload-tool)
-    ("run_subagent" . subagent-tool)))
+    ("run_subagent" . subagent-tool)
+    ("browser_open" . browser-open-tool)
+    ("browser_click" . browser-click-tool)
+    ("browser_type" . browser-type-tool)
+    ("browser_get_text" . browser-get-text-tool)
+    ("browser_eval" . browser-eval-tool)
+    ("browser_screenshot" . browser-screenshot-tool)
+    ("browser_video" . browser-video-tool)
+    ("browser_assert" . browser-assert-tool)
+    ("browser_close" . browser-close-tool)))
 
 (defun make-chat-backend (&key backend)
   "Construct the chat provider backend, optionally overriding HARNESS_BACKEND."
