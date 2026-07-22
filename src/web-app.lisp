@@ -36,9 +36,9 @@
           :history (getf descriptor :history)
           :durable-session-id durable-id
           :run-session-id *web-run-session-id*
+          :options 'chat-options
           :log-directory *web-log-directory*
-          :handlers `(("echo" . ,(lambda (arguments)
-                                    (format nil "echo: ~A" (gethash "message" arguments))))))))))
+          :handlers 'chat-handlers)))))
 
 (defun web-known-sessions (&key (refresh t))
   "Return durable sessions newest-first, including CLI-created snapshots."
@@ -122,6 +122,11 @@
 
 (defun web-on-new-window (body)
   (setf (clog:title (clog:html-document body)) "Self-improving Agent Harness")
+  (clog:js-execute body
+                   (concatenate 'string
+                                "var m=document.querySelector('meta[name=\"viewport\"]');"
+                                " if(!m){m=document.createElement('meta');m.name='viewport';document.head.appendChild(m);}"
+                                " m.content='width=device-width,initial-scale=1,interactive-widget=resizes-content';"))
   (let* ((root (web-style (clog:create-div body :class "harness-web")
                           "min-height:100vh;min-height:100dvh;box-sizing:border-box;padding:clamp(10px,2vw,18px);display:flex;flex-direction:column;gap:12px;font-family:system-ui,sans-serif;background:#fff;color:#0f172a;overflow-x:hidden"))
          (controls (web-style (clog:create-div root :class "session-controls")
@@ -144,10 +149,10 @@
          (sidebar (web-style (clog:create-div workspace :class "session-sidebar") "width:240px;max-width:100%;flex:1 1 220px;overflow-y:auto;padding:10px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;box-sizing:border-box"))
          (sidebar-title (clog:create-div sidebar :content "Previous sessions"))
          (session-list (web-mark (clog:create-div sidebar :class "session-list") "session-list"))
-         (conversation (web-style (clog:create-div workspace :class "conversation") "flex:999 1 360px;min-width:0;display:flex;flex-direction:column;gap:10px"))
-         (chat-log (web-mark (web-style (clog:create-div conversation :class "chat-log") "flex:1;min-height:280px;max-height:65vh;max-height:65dvh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;box-sizing:border-box") "chat-log"))
+         (conversation (web-style (clog:create-div workspace :class "conversation") "flex:999 1 360px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:10px"))
+         (chat-log (web-mark (web-style (clog:create-div conversation :class "chat-log") "flex:1;min-height:0;max-height:65vh;max-height:65dvh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;box-sizing:border-box") "chat-log"))
          (composer-row (web-style (clog:create-div conversation :class "composer-row") "display:flex;flex-wrap:wrap;gap:8px;align-items:stretch"))
-         (composer (web-mark (web-style (clog:create-form-element composer-row :textarea) "flex:1 1 240px;min-height:54px;resize:vertical;padding:10px;font:inherit;box-sizing:border-box") "prompt-composer"))
+         (composer (web-mark (web-style (clog:create-text-area composer-row :rows 2) "flex:1 1 240px;min-height:54px;resize:vertical;padding:10px;font:inherit;box-sizing:border-box") "prompt-composer"))
          (send (web-mark (web-style (clog:create-button composer-row :content "Send") "flex:1 1 92px;min-width:92px;min-height:54px;font:inherit") "send-turn"))
          (session nil)
          (rendered-sequence 0)
@@ -157,6 +162,14 @@
           (clog:value model-input) "syn:large:text")
     (setf (clog:attribute composer "placeholder") "Enter a prompt")
     (setf (clog:disabledp send) t)
+    (clog:set-on-focus
+     composer
+     (lambda (obj)
+       (declare (ignore obj))
+       ;; On mobile the soft keyboard can cover the input; scroll it into view.
+       (clog:js-execute composer
+                        (format nil "setTimeout(function(){~A.scrollIntoView({block:'center',behavior:'smooth'});},300)"
+                                (clog:script-id composer)))))
     (labels ((render-active-session ()
                (setf (clog:inner-html chat-log) ""
                      (clog:inner-html state) (cond (request-in-progress-p "Request in progress — waiting for provider response (up to 120 seconds)…")
@@ -193,6 +206,7 @@
            (setf session (web-register-session
                           (make-web-session :backend (web-selected-backend backend-name) :model model-name
                                             :run-session-id *web-run-session-id*
+                                            :options 'chat-options
                                             :log-directory *web-log-directory*
                                             :handlers 'chat-handlers)))
            (render-session-list)
