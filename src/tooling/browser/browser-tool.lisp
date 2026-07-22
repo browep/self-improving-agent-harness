@@ -18,11 +18,27 @@
   "Persistent Playwright bridge for browser_* tools. Lazily started by
 BROWSER-OPEN, reused by subsequent tools, closed by BROWSER-CLOSE.")
 
+;; Ensure the Playwright bridge subprocess is terminated on Lisp image exit.
+;; Without this, a node process spawned by MAKE-PLAYWRIGHT-BRIDGE could be
+;; orphaned if the image exits (or is reloaded) without an explicit
+;; BROWSER-CLOSE. The hook is idempotent: PW-CLOSE is wrapped in
+;; IGNORE-ERRORS and tolerates an already-dead bridge.
+(push (lambda ()
+        (when (and *playwright-bridge* (pw-alive-p *playwright-bridge*))
+          (ignore-errors (pw-close *playwright-bridge*))))
+      sb-ext:*exit-hooks*)
+
 (defparameter *browser-default-url* "http://localhost:18080/"
   "Default URL navigated to by BROWSER-OPEN when the tool call omits :url.")
 
 (defparameter *browser-default-screenshot-path* "/workspace/browser-screenshot.png"
   "Default file path for BROWSER-SCREENSHOT when the tool call omits :path.")
+
+(defparameter *browser-default-timeout* 30
+  "Default timeout in seconds for browser navigation and assertions. Passed
+to the Playwright bridge as the per-call timeout (e.g. navigate, wait_for) when
+the tool call omits an explicit :timeout. Reload-friendly: redefining this
+parameter at the REPL changes the default for subsequent tool calls.")
 
 ;;; ---------------------------------------------------------------------------
 ;;; Helpers.
@@ -88,7 +104,9 @@ destructure with defaults). Keys are coerced to strings."
 
 Starts the persistent Playwright bridge (if not already alive), navigates to
 :url (default *BROWSER-DEFAULT-URL*), and optionally waits for a CSS selector
-(:wait_for). Returns a status string with the page title and final URL."
+(:wait_for). :timeout (default *BROWSER-DEFAULT-TIMEOUT*, in seconds) is
+forwarded to the bridge as the navigation/wait timeout in milliseconds.
+Returns a status string with the page title and final URL."
   (let ((url (browser-getarg arguments "url" *browser-default-url*))
         (wait-for (browser-getarg arguments "wait_for")))
     (log-interaction :info "tool-call" :tool "browser_open"
@@ -98,21 +116,26 @@ Starts the persistent Playwright bridge (if not already alive), navigates to
         ;; Lazily start the bridge if it is missing or died.
         (unless (browser-ensure-bridge)
           (setf *playwright-bridge* (make-playwright-bridge)))
-        (let ((nav-result
-                (pw-call *playwright-bridge* "navigate"
-                         (browser-make-params "url"
-                                              (browser-getarg arguments "url"
-                                                              *browser-default-url*)))))
-          (let ((wait-for (browser-getarg arguments "wait_for")))
-            (when wait-for
-              (pw-call *playwright-bridge* "wait_for"
-                       (browser-make-params "selector" wait-for))))
-          (let ((title (gethash "title" nav-result))
-                (final-url (gethash "url" nav-result)))
-            (log-interaction :info "tool-completed" :tool "browser_open"
-                             :title title :url final-url)
-            (format nil "Browser opened: title=~A url=~A"
-                    (or title "") (or final-url "")))))
+        (let* ((timeout-seconds
+                 (browser-getarg arguments "timeout" *browser-default-timeout*))
+               (timeout-ms (round (* timeout-seconds 1000))))
+          (let ((nav-result
+                  (pw-call *playwright-bridge* "navigate"
+                           (browser-make-params "url"
+                                                (browser-getarg arguments "url"
+                                                                *browser-default-url*)
+                                                "timeout" timeout-ms))))
+            (let ((wait-for (browser-getarg arguments "wait_for")))
+              (when wait-for
+                (pw-call *playwright-bridge* "wait_for"
+                         (browser-make-params "selector" wait-for
+                                              "timeout" timeout-ms))))
+            (let ((title (gethash "title" nav-result))
+                  (final-url (gethash "url" nav-result)))
+              (log-interaction :info "tool-completed" :tool "browser_open"
+                               :title title :url final-url)
+              (format nil "Browser opened: title=~A url=~A"
+                      (or title "") (or final-url ""))))))
     (error (condition)
       (log-interaction :error "tool-failed" :tool "browser_open"
                        :message (princ-to-string condition))
