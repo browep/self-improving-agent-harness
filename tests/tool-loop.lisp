@@ -161,6 +161,13 @@
                     "XML recovery emits a tool result message")
       (ensure-equal "echoed: from-xml" (getf tool-message :content)
                     "XML recovery tool result contains handler output")))
+  ;; Controlled recovery permits only an explicit quoted run_shell command in a closed block.
+  (let ((calls (self-improving-agent-harness::parse-text-embedded-tool-calls
+                "<tool_call>run_shell command=\"pwd\"</arg_value></tool_call>")))
+    (ensure-equal "run_shell" (getf (first calls) :name)
+                  "controlled malformed recovery preserves the requested tool")
+    (ensure-equal "{\"command\":\"pwd\"}" (getf (first calls) :arguments)
+                  "controlled malformed recovery extracts only the explicit quoted command"))
 (let* ((handler-called nil)
          (truncated-response
            (make-completion-response

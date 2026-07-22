@@ -608,6 +608,22 @@ Returns the alist, or :INCOMPLETE when markup is truncated/unclosed."
         :recovery recovery
         :synthetic-result synthetic-result))
 
+(defun parse-controlled-text-tool-call-attributes (tool-name body)
+  "Safely recover RUN_SHELL COMMAND='...' from a closed malformed text call.
+
+This narrow compatibility path never infers missing values or accepts unquoted
+arguments; callers only use it for a complete </tool_call> block."
+  (when (string-equal tool-name "run_shell")
+    (let ((start (search "command=" body :test #'char-equal)))
+      (when start
+        (let* ((quote-index (+ start (length "command=")))
+               (quote (and (< quote-index (length body))
+                           (char body quote-index))))
+          (when (member quote '(#\' #\"))
+            (let ((end (position quote body :start (1+ quote-index))))
+              (when (and end (> end (1+ quote-index)))
+                (list (cons "command" (subseq body (1+ quote-index) end)))))))))))
+
 (defun parse-text-embedded-tool-calls (text)
   "Parse XML-ish <tool_call> blocks from TEXT.
 
@@ -663,6 +679,16 @@ the tool loop can return an error without executing a handler."
                             (body (subseq text name-end body-end))
                             (pairs (parse-text-embedded-tool-call-arguments body)))
                        (cond
+                         ((and close (null pairs)
+                               (parse-controlled-text-tool-call-attributes name body))
+                          (setf status (or status :controlled-text))
+                          (push (make-recovered-tool-call
+                                 name
+                                 (encode-tool-arguments-json
+                                  (parse-controlled-text-tool-call-attributes name body))
+                                 :recovery :controlled-text)
+                                calls)
+                          (setf cursor (+ close (length "</tool_call>"))))
                          ((or (eq pairs :incomplete) (null close))
                           (setf status :truncated)
                           (push (make-recovered-tool-call
