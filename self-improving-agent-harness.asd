@@ -47,7 +47,13 @@
                (:file "tests/logging")
                (:file "tests/resume")
                (:file "tests/subagent")
-               (:file "tests/web-session"))
+               (:file "tests/web-session")
+               ;; Standalone CLOG web UI browser integration test
+               ;; (issue #42). NOT invoked by RUN-TESTS: it needs a
+               ;; live CLOG server + headless Chromium. Load and run
+               ;; it explicitly via scripts/run-browser-verify.lisp
+               ;; or RUN-BROWSER-VERIFICATION-TEST.
+               (:file "tests/tooling/browser/harness-web-ui/harness-web-ui-integration"))
   :perform (test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call :self-improving-agent-harness/tests :run-tests)))
