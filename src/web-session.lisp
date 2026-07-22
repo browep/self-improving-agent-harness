@@ -28,7 +28,8 @@
 (defun web-event-visible-in-chat-log-p (event)
   "Expose user, assistant, and tool lifecycle events in the browser transcript."
   (member (getf event :kind)
-          '("user-message" "assistant-message" "tool-call-started" "tool-call-completed")
+          '("user-message" "assistant-message" "tool-call-started" "tool-call-completed"
+            "tool-call-failed" "turn-failed")
           :test #'string=))
 
 (defun make-web-session-log-context (log-directory durable-session-id)
