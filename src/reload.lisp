@@ -11,6 +11,25 @@ newly registered tools on a fresh provider request without a human message.
 Consumed by MAYBE-RUN-SYNTHETIC-FOLLOWUP-TURNS after the primary turn or
 slash-command finishes.")
 
+(defparameter *post-reload-hooks* nil
+  "List of zero-argument functions run after a successful reload.
+
+Each hook is called with errors muffled so one failing hook cannot abort
+the reload result. Used to re-bind live subsystems (e.g. re-registering the
+CLOG on-new-window handler) that captured a function object at startup.")
+
+(defun add-post-reload-hook (function)
+  "Append FUNCTION to *POST-RELOAD-HOOKS* (idempotent by identity)."
+  (unless (member function *post-reload-hooks* :test #'eq)
+    (setf *post-reload-hooks*
+          (append *post-reload-hooks* (list function))))
+  function)
+
+(defun run-post-reload-hooks ()
+  "Invoke every post-reload hook, muffling per-hook errors."
+  (dolist (hook *post-reload-hooks*)
+    (ignore-errors (funcall hook))))
+
 (defparameter *suppress-synthetic-followup-scheduling* nil
   "When true, SCHEDULE-SYNTHETIC-FOLLOWUP is a no-op.
 
@@ -370,6 +389,7 @@ duration-seconds, even when a load error is captured into status=error."
                 "RELOAD_SUMMARY status=~A warnings=~D notes=~D duration_seconds=~,3F~%"
                 status warning-count note-count duration)
         (finish-output *error-output*)))
+    (run-post-reload-hooks)
     ;; Queue a synthetic follow-up so newly registered tools can be advertised
     ;; on a fresh provider request without waiting for another human message.
     ;; Multiple reloads in one primary turn collapse to a single follow-up.

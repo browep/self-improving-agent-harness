@@ -13,6 +13,13 @@
 
 (defvar *web-sessions* (make-hash-table :test #'equal))
 (defvar *web-session-order* '())
+(defvar *web-turn-in-progress-p* nil
+  "True while a browser chat turn is running. Used by WEB-RELOAD-BROWSERS to
+defer a forced refresh until the turn completes and the final assistant
+message is recorded, so a reconnecting tab sees the complete transcript.")
+(defvar *web-browser-reload-pending-p* nil
+  "Set by WEB-RELOAD-BROWSERS when a refresh is requested during a turn. The
+send handler checks this after the turn completes and triggers the refresh.")
 
 (defun web-register-session (session)
   "Keep browser sessions available for later selection while this server runs."
@@ -96,6 +103,19 @@
   (setf (clog:attribute element "style") value)
   element)
 
+(defun web-split-lines (text)
+  "Split TEXT into a list of lines on #\Newline, stripping trailing #\Return."
+  (let ((text (or text ""))
+        (lines '())
+        (start 0))
+    (loop for i from 0 below (length text)
+          for ch = (char text i)
+          when (char= ch #\Newline)
+            do (push (string-right-trim '(#\Return) (subseq text start i)) lines)
+               (setf start (1+ i)))
+    (push (string-right-trim '(#\Return) (subseq text start)) lines)
+    (nreverse lines)))
+
 (defun web-render-chat-message (chat-log event)
   "Render chat messages and tool lifecycle cards, including recovered malformed calls."
   (when (web-event-visible-in-chat-log-p event)
@@ -103,21 +123,41 @@
            (userp (string= kind "user-message"))
            (assistantp (string= kind "assistant-message"))
            (tool-start-p (string= kind "tool-call-started"))
+           (toolp (or tool-start-p (string= kind "tool-call-completed")))
            (role (cond (userp "You") (assistantp "Assistant")
- ((string= kind "turn-failed") "Provider error")
- (tool-start-p (format nil "Tool call · ~A" (or (getf event :tool-name) "unknown")))
-                       (t (format nil "Tool result · ~A" (or (getf event :tool-name) "unknown")))))
+                       ((string= kind "turn-failed") "Provider error")
+                       (tool-start-p (format nil "Tool call \u00b7 ~A" (or (getf event :tool-name) "unknown")))
+                       (t (format nil "Tool result \u00b7 ~A" (or (getf event :tool-name) "unknown")))))
            (text (cond (tool-start-p (or (getf event :arguments) "{}"))
                        ((string= kind "tool-call-completed") (or (getf event :result) ""))
                        (t (or (getf event :text) (getf event :message) ""))))
            (color (cond (userp "#3b82f6") (assistantp "#94a3b8") (tool-start-p "#d97706") (t "#059669")))
            (background (cond (userp "#eff6ff") (assistantp "#f8fafc") (tool-start-p "#fffbeb") (t "#ecfdf5")))
-           (item (web-mark (clog:create-div chat-log
-                                            :class "chat-message"
-                                            :content (format nil "<div class=\"role\">~A</div><div>~A</div>"
-                                                             role (web-html-escape text)))
+           (item (web-mark (clog:create-div chat-log :class "chat-message")
                            (format nil "message-~D" (getf event :sequence)))))
       (web-style item (format nil "box-sizing:border-box;width:100%;padding:12px 14px;border-radius:6px;line-height:1.4;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:0.92rem;border-left:3px solid ~A;background:~A;color:#0f172a" color background))
+      (clog:create-div item :class "role" :content role)
+      (let ((lines (when toolp (web-split-lines text))))
+        (if (and toolp (> (length lines) 10))
+            (let* ((visible-text (format nil "~{~A~^~%~}" (subseq lines 0 10)))
+                   (hidden-count (- (length lines) 10))
+                   (hidden-text (format nil "~{~A~^~%~}" (subseq lines 10)))
+                   (visible-div (clog:create-div item :content (web-html-escape visible-text)))
+                   (hidden-div (web-style (clog:create-div item :content (web-html-escape hidden-text)) "display:none"))
+                   (toggle (web-style (clog:create-button item :content (format nil "Show ~D more line~:P" hidden-count))
+                                      "margin-top:6px;padding:2px 8px;font-size:0.85rem;cursor:pointer;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#0f172a")))
+              (declare (ignore visible-div))
+              (clog:set-on-click toggle
+                (lambda (obj)
+                  (declare (ignore obj))
+                  (if (string= (clog:attribute hidden-div "style") "display:none")
+                      (progn
+                        (setf (clog:attribute hidden-div "style") "display:block")
+                        (setf (clog:inner-html toggle) "Show less"))
+                      (progn
+                        (setf (clog:attribute hidden-div "style") "display:none")
+                        (setf (clog:inner-html toggle) (format nil "Show ~D more line~:P" hidden-count)))))))
+            (clog:create-div item :content (web-html-escape text))))
       item)))
 
 (defun web-on-new-window (body)
@@ -187,7 +227,19 @@
                (when session
                  (dolist (event (web-session-events session))
                    (web-render-chat-message chat-log event))
-                 (setf rendered-sequence (length (web-session-events session)))))
+                 (setf rendered-sequence (length (web-session-events session)))
+                 ;; Scroll the transcript to the bottom so a freshly loaded
+                 ;; previous conversation shows the most recent messages first.
+                 (clog:js-execute chat-log
+                                  (format nil "~A.scrollTop = ~A.scrollHeight;"
+                                          (clog:script-id chat-log)
+                                          (clog:script-id chat-log))))
+               ;; Reflect the active session in the URL hash so a browser
+               ;; refresh returns to the same conversation.
+               (setf (clog:hash (clog:location body))
+                     (if session
+                         (format nil "#~A" (web-session-durable-session-id session))
+                         "")))
              (load-session (selected)
                (setf session selected)
                (render-active-session))
@@ -206,6 +258,16 @@
                      (if sessions-collapsed-p "display:none" "display:block"))))
       (render-session-list)
       (render-sidebar-toggle)
+      ;; On a fresh page load (or refresh), restore the session indicated
+      ;; by the URL hash anchor so the user returns to the same conversation.
+      (let* ((raw-hash (clog:hash (clog:location body)))
+             (durable-id (when (and (stringp raw-hash) (plusp (length raw-hash)))
+                           (string-trim '(#\#) raw-hash))))
+        (when (and durable-id (plusp (length durable-id)))
+          (let ((found (find durable-id (web-known-sessions)
+                             :key #'web-session-durable-session-id :test #'string=)))
+            (when found
+              (load-session found)))))
       (clog:set-on-click
        sidebar-title
        (lambda (obj)
@@ -231,23 +293,53 @@
        (lambda (obj)
          (declare (ignore obj))
          (when (and session (not request-in-progress-p))
-           ;; Mutate the browser immediately before entering the synchronous server-side
-           ;; provider/tool loop, so a slow provider no longer looks like a dead Send click.
-           (setf request-in-progress-p t
-                 (clog:inner-html state) "Request in progress — waiting for provider response (up to 120 seconds)…"
-                 (clog:disabledp send) t)
-           (unwind-protect
-                (progn
-                  (web-session-submit session (clog:value composer))
-                  (setf (clog:value composer) "")
-                  (dolist (event (web-session-events session))
-                    (when (> (getf event :sequence) rendered-sequence)
-                      (web-render-chat-message chat-log event)))
-                  (setf rendered-sequence (length (web-session-events session)))
-                  (render-session-list))
-             (setf request-in-progress-p nil
-                   (clog:inner-html state) "ready"
-                   (clog:disabledp send) nil)))))
+           (let ((text (clog:value composer)))
+             ;; Mutate the browser immediately before entering the synchronous
+             ;; server-side provider/tool loop, so a slow provider no longer
+             ;; looks like a dead Send click.
+             (setf request-in-progress-p t
+                   *web-turn-in-progress-p* t
+                   (clog:inner-html state) "Request in progress — waiting for provider response (up to 120 seconds)…"
+                   (clog:disabledp send) t)
+             ;; Clear the input and show the user message right away so the
+             ;; UI feels responsive before the synchronous provider call blocks.
+             (setf (clog:value composer) "")
+             (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
+               (when (plusp (length trimmed))
+                 (web-render-chat-message chat-log
+                                          (list :kind "user-message"
+                                                :sequence (1+ (length (web-session-events session)))
+                                                :text text))
+                 ;; Skip this event when rendering post-submit events since
+                 ;; we already rendered it manually above.
+                 (incf rendered-sequence)
+                 (clog:js-execute chat-log
+                                  (format nil "~A.scrollTop = ~A.scrollHeight;"
+                                          (clog:script-id chat-log)
+                                          (clog:script-id chat-log)))))
+             (unwind-protect
+                  (progn
+                    (web-session-submit session text)
+                    (dolist (event (web-session-events session))
+                      (when (> (getf event :sequence) rendered-sequence)
+                        (web-render-chat-message chat-log event)))
+                    (setf rendered-sequence (length (web-session-events session)))
+                    (render-session-list)
+                    ;; Scroll to bottom again after the full turn completes so
+                    ;; the assistant response is visible.
+                    (clog:js-execute chat-log
+                                     (format nil "~A.scrollTop = ~A.scrollHeight;"
+                                             (clog:script-id chat-log)
+                                             (clog:script-id chat-log))))
+               (setf request-in-progress-p nil
+                     *web-turn-in-progress-p* nil
+                     (clog:inner-html state) "ready"
+                     (clog:disabledp send) nil)
+               ;; If reload_harness was called during this turn, the browser
+               ;; refresh was deferred until now so the final assistant message
+               ;; is already in the session events before the tab reconnects.
+               (when *web-browser-reload-pending-p*
+                 (web-reload-browsers)))))))
       (clog:set-on-click
        clear
        (lambda (obj)
@@ -290,6 +382,29 @@
   (finish-output)
   (loop (sleep 60)))
 
+(defun web-reload-browsers ()
+  "Send location.reload() to every live CLOG browser connection.
+
+Called as a post-reload hook so open tabs pick up reloaded UI code without a
+manual refresh. If a browser chat turn is in progress (*WEB-TURN-IN-PROGRESS-P*),
+the refresh is deferred: the send handler checks *WEB-BROWSER-RELOAD-PENDING-P*
+after the turn completes and the final assistant message is recorded, then
+calls this function so a reconnecting tab sees the complete transcript."
+  (when (and (find-package :clog)
+             (fboundp (intern "IS-RUNNING-P" :clog))
+             (funcall (intern "IS-RUNNING-P" :clog)))
+    (if *web-turn-in-progress-p*
+        ;; Defer: the send handler will call us after the turn finishes.
+        (setf *web-browser-reload-pending-p* t)
+        (progn
+          (setf *web-browser-reload-pending-p* nil)
+          (let ((ids '()))
+            (maphash (lambda (k v) (declare (ignore v)) (push k ids))
+                     (symbol-value (intern "*CONNECTION-IDS*" :clog-connection)))
+            (dolist (id ids)
+              (ignore-errors
+                (funcall (intern "EXECUTE" :clog-connection) id "location.reload();"))))))))
+
 ;;; Reload-time re-registration for an already-running CLOG server.
 ;;;
 ;;; run-web-server registers a post-reload hook, but only when it executes.
@@ -310,4 +425,8 @@
      (when (funcall (intern "IS-RUNNING-P" :clog))
        (funcall (intern "SET-ON-NEW-WINDOW" :clog)
                 (lambda (body) (web-on-new-window body))
-                :path "/")))))
+                :path "/"))))
+  ;; Force every open browser tab to refresh after a reload so it picks
+  ;; up the reloaded UI code. The new connection re-runs the current
+  ;; web-on-new-window and restores the session from the URL hash.
+  (add-post-reload-hook #'web-reload-browsers))
