@@ -94,12 +94,13 @@ This is appended to the real Claude system prompt.  It intentionally derives
 its list from CLAUDE-MCP-TOOL-SPECIFICATIONS so the prompt cannot advertise a
 tool that the bridge does not expose."
   (let ((names (when (fboundp 'claude-mcp-tool-specifications)
-                 (mapcar (lambda (tool) (gethash "name" tool))
+                 (mapcar (lambda (tool)
+                           (format nil "mcp__harness__~A" (gethash "name" tool)))
                          (claude-mcp-tool-specifications)))))
     (format nil
             "~%~%Claude Code native-tool contract:\n~
-The following Harness tools are live native MCP tools for this invocation: ~{~A~^, ~}.\n~
-When the user requests a named tool, or when you state that you will use a tool, emit the actual native MCP tool call in the same turn before writing any natural-language response. Never answer with an intention, shell snippet, simulated output, or a claim that a call will happen later. Tool names are capabilities, not text formatting. After a tool returns, use its real result in your response."
+The following are the exact live Harness MCP tool names for this invocation: ~{~A~^, ~}.\n~
+When the user asks for a Harness tool such as run_shell, invoke its exact mcp__harness__* name (for example mcp__harness__run_shell), not a Claude built-in tool, a todo/planning tool, a shell snippet, or text that describes a future call. When the user requests a named tool, or when you state that you will use a tool, emit the actual native MCP tool call in the same turn before writing any natural-language response. After a tool returns, use its real result in your response."
             (or names '("no tools")))))
 
 (defun claude-system-prompt (request)
@@ -183,10 +184,23 @@ UIOP replaces rather than merges an environment list on this SBCL build, so PATH
 and HOME must accompany the runtime-only OAuth variable.  No value is logged."
   (remove nil
           (list (format nil "CLAUDE_CODE_OAUTH_TOKEN=~A" token)
+                ;; The Lisp bridge loads the live Harness tool registry. Claude
+                ;; Code defaults MCP startup to 5 seconds, which is too short
+                ;; for a cold Common Lisp image; this is milliseconds.
+                "MCP_TIMEOUT=120000"
                 (let ((path (uiop:getenv "PATH"))) (and path (format nil "PATH=~A" path)))
                 (let ((home (uiop:getenv "HOME"))) (and home (format nil "HOME=~A" home)))
+                (let ((xdg-cache (uiop:getenv "XDG_CACHE_HOME")))
+                  (and xdg-cache (format nil "XDG_CACHE_HOME=~A" xdg-cache)))
                 (let ((xdg (uiop:getenv "XDG_CONFIG_HOME")))
-                  (and xdg (format nil "XDG_CONFIG_HOME=~A" xdg))))))
+                  (and xdg (format nil "XDG_CONFIG_HOME=~A" xdg)))
+                ;; The generated MCP bridge is a Claude child-of-child. Pass
+                ;; only non-secret correlation values so its existing handlers
+                ;; append auditable TOOL_CALL/TOOL_DONE events to this session.
+                (let ((session-id (uiop:getenv "HARNESS_CHAT_SESSION_ID")))
+                  (and session-id (format nil "HARNESS_CHAT_SESSION_ID=~A" session-id)))
+                (let ((log-dir (uiop:getenv "HARNESS_LOG_DIR")))
+                  (and log-dir (format nil "HARNESS_LOG_DIR=~A" log-dir))))))
 
 (defun run-claude-cli (argv token timeout)
   "Run ARGV once and return stdout, stderr, and exit status.

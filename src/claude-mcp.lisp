@@ -91,7 +91,8 @@ schemas.  Tool schemas arrive over MCP from CLAUDE-MCP-TOOL-SPECIFICATIONS."
        (claude-mcp-jsonrpc-success
         id (claude-mcp-object
             "protocolVersion" "2024-11-05"
-            "capabilities" (claude-mcp-object "tools" (claude-mcp-object))
+            "capabilities" (claude-mcp-object
+                            "tools" (claude-mcp-object "listChanged" nil))
             "serverInfo" (claude-mcp-object "name" "harness-lisp-bridge"
                                              "version" "1"))))
       ((string= method "tools/list")
@@ -121,7 +122,13 @@ sent to stderr by the launcher so they cannot corrupt the protocol stream."
         while line
         do (handler-case
                (let* ((request (yason:parse line))
+                      (method (gethash "method" request))
                       (response (claude-mcp-handle-request request)))
+                 ;; Protocol diagnostics are method-only, written to stderr,
+                 ;; and never include tool arguments or environment data.
+                 (when (string= (or (uiop:getenv "HARNESS_MCP_TRACE") "") "1")
+                   (format *error-output* "HARNESS_MCP method=~A~%" method)
+                   (finish-output *error-output*))
                  (when response
                    (yason:encode response output)
                    (terpri output)
