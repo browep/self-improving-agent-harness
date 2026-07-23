@@ -278,6 +278,30 @@ HARNESS_LIVE_CLAUDE_SMOKE=1 bin/verify-claude-oauth
 It makes two real CLI calls, validates structured JSON and exact-session resume,
 and emits only sanitized evidence.
 
+## Claude Agent SDK direct backend seam (opt-in, issue #67)
+
+`claude-sdk` is a distinct, narrower backend from `claude` above: it is a
+placeholder seam for a future **direct** Claude Agent SDK/Anthropic transport,
+not a Claude Code CLI adapter. Selecting it never spawns the `claude` binary
+and never opens a network connection.
+
+```bash
+./bin/chat --backend claude-sdk --model sonnet --prompt 'hello'
+```
+
+Like `claude`, it requires a runtime-only `CLAUDE_CODE_OAUTH_TOKEN` (checked at
+completion time, not at CLI parse time) and never reads or falls back to
+`ANTHROPIC_API_KEY`. Unlike `claude`, no transport is implemented yet: once a
+token is present, every call deliberately fails with a clear
+not-implemented error rather than guessing an undocumented wire protocol.
+There is no tool support, streaming, session resume, CLOG wiring, or Anthropic
+Messages HTTP code behind this backend today.
+
+A real implementation is blocked on a captured, sanitized request/response
+contract (issue #66); `claude-sdk` intentionally lands ahead of that capture so
+selection, identity, and credential boundaries can be proven now. See
+`docs/claude-sdk-backend.md` for the full scope and rationale.
+
 ## Chat CLI
 
 `bin/chat` runs the harness `run_shell` tool inside its Docker container. It has

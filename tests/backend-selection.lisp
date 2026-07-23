@@ -79,6 +79,26 @@ OpenAI Platform API-key billing is rejected. No OPENAI_API_KEY path exists."
          (ensure-true (not (backend-api-key-configured-p b))
                       "Claude setup-token backend is not an API-key backend"))
 
+       ;; claude-sdk is a distinct, narrower direct-transport seam: selectable
+       ;; without requiring a token at construction time (only COMPLETE does),
+       ;; and never the same class as the CLI `claude` backend.
+       (set-env "HARNESS_BACKEND" "claude-sdk")
+       (set-env "CLAUDE_CODE_OAUTH_TOKEN" nil)
+       (let ((b (select-chat-backend)))
+         (ensure-true (typep b 'self-improving-agent-harness:claude-sdk-backend)
+                      "HARNESS_BACKEND=claude-sdk selects the claude-sdk direct backend")
+         (ensure-equal "claude-sdk" (backend-name b)
+                       "claude-sdk backend has a stable provider identity")
+         (ensure-true (not (typep b 'self-improving-agent-harness:claude-backend))
+                      "claude-sdk backend is not the CLI claude backend")
+         (ensure-true (not (backend-api-key-configured-p b))
+                      "claude-sdk backend is not an API-key backend"))
+
+       (set-env "HARNESS_BACKEND" "CLAUDE-SDK")
+       (let ((b (select-chat-backend)))
+         (ensure-true (typep b 'self-improving-agent-harness:claude-sdk-backend)
+                      "HARNESS_BACKEND=claude-sdk is case-insensitive"))
+
        ;; OpenAI Platform API-key path is explicitly rejected.
        (set-env "HARNESS_BACKEND" "openai")
        (handler-case

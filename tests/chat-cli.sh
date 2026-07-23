@@ -65,6 +65,10 @@ case "$help_output" in
   *'Usage: bin/chat'*'--backend BACKEND'*'--codex-home PATH'*'--session-id ID'*) ;;
   *) printf 'Test failed: help output missing session-ID/backend/codex-home guidance\n' >&2; exit 1 ;;
 esac
+case "$help_output" in
+  *'claude-sdk'*) ;;
+  *) printf 'Test failed: help output missing claude-sdk backend guidance\n' >&2; exit 1 ;;
+esac
 
 expect_error 2 'must be a positive integer' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" "$repo_root/bin/chat" --max-rounds nope --prompt x
@@ -137,10 +141,18 @@ expect_success 'backend=claude' \
       HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file \
       "$repo_root/bin/chat" --backend CLAUDE --model sonnet --prompt 'claude path'
 
+# claude-sdk is a distinct direct-transport seam (issue #67), also OAuth-only:
+# wrapper parsing accepts it without an OpenRouter key, case-insensitively. The
+# Lisp backend defers its CLAUDE_CODE_OAUTH_TOKEN check to completion time.
+expect_success 'backend=claude-sdk' \
+  env -u OPENROUTER_API_KEY HARNESS_CHAT_RUNNER="$runner" \
+      HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file \
+      "$repo_root/bin/chat" --backend CLAUDE-SDK --model claude-sdk-fixture-model --prompt 'claude-sdk path'
+
 expect_error 2 'not supported' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
       "$repo_root/bin/chat" --backend openai --prompt x
-expect_error 2 'must be openrouter, synthetic, codex, or claude' \
+expect_error 2 'must be openrouter, synthetic, codex, claude, or claude-sdk' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
       "$repo_root/bin/chat" --backend nope --prompt x
 expect_error 2 'only valid with --backend codex' \

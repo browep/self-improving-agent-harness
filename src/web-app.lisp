@@ -35,7 +35,7 @@ send handler checks this after the turn completes and triggers the refresh.")
         (web-register-session
          (make-web-session
           :backend (web-selected-backend (let ((saved (getf descriptor :backend)))
-                                           (if (member saved '("synthetic" "openrouter" "codex" "claude") :test #'string=)
+                                           (if (member saved '("synthetic" "openrouter" "codex" "claude" "claude-sdk") :test #'string=)
                                                saved
                                                "synthetic"))
                                          :session-id (getf descriptor :provider-session-id))
@@ -93,7 +93,8 @@ of registration order."
             ((string= name "openrouter") (make-openrouter-backend :api-key (uiop:getenv "OPENROUTER_API_KEY")))
             ((string= name "codex") (make-codex-app-server-backend))
             ((string= name "claude") (make-claude-backend :session-id session-id))
-            (t (error "Backend must be synthetic, openrouter, codex, or claude; got ~S." name)))))
+            ((string= name "claude-sdk") (make-claude-sdk-backend))
+            (t (error "Backend must be synthetic, openrouter, codex, claude, or claude-sdk; got ~S." name)))))
 
 (defun web-html-escape (text)
   (with-output-to-string (out)

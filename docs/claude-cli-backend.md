@@ -1,5 +1,10 @@
 # Claude Code CLI backend decision record
 
+> See also `docs/claude-sdk-backend.md` for the distinct, selectable
+> `claude-sdk` backend: a narrower placeholder seam for a possible future
+> *direct* Anthropic transport. It never spawns the CLI binary described below
+> and has no implemented transport yet.
+
 ## Scope
 
 The `claude` harness backend is a **Claude Code binary-only** adapter. It runs

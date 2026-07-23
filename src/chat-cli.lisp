@@ -558,7 +558,7 @@ not an error. Returns the list of variable names set."
          (backend-override (let ((saved (getf resume-plan :backend)))
                              (and resume-plan
                                   (not (string= (or (uiop:getenv "HARNESS_CHAT_BACKEND_EXPLICIT") "") "true"))
-                                  (member saved '("openrouter" "synthetic" "codex" "claude") :test #'string=)
+                                  (member saved '("openrouter" "synthetic" "codex" "claude" "claude-sdk") :test #'string=)
                                   saved)))
          (backend (make-chat-backend :backend backend-override)))
     ;; One session JSONL file per process: agent-logs/$ISO-TIMESTAMP.jsonl under

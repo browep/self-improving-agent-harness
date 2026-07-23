@@ -191,6 +191,12 @@
    #:claude-verification-evidence
    #:format-claude-verification-evidence
    #:*claude-verify-prompt*
+   ;; Claude Agent SDK direct backend seam (issue #67): OAuth-only, no direct
+   ;; transport implemented yet, distinct from CLAUDE-BACKEND above.
+   #:claude-sdk-backend
+   #:make-claude-sdk-backend
+   #:claude-sdk-backend-error
+   #:claude-sdk-backend-error-reason
    ;; Harness-owned Claude MCP bridge (schemas project from Lisp definitions)
    #:claude-mcp-tool-specifications
    #:claude-mcp-config-json
