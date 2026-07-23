@@ -1,0 +1,2 @@
+{"type":"assistant","session_id":"captured-web-session","message":{"role":"assistant","content":[{"type":"text","text":"**mcp__harness__run_shell**\n\n*Request*\n\n```json\n{\n  \"command\": \"pwd\"\n}\n```\n\n*Response*\n\n```\n/workspace\n```\n\n/workspace"}]}}
+{"type":"result","subtype":"success","session_id":"captured-web-session","result":"**mcp__harness__run_shell**\n\n*Request*\n\n```json\n{\n  \"command\": \"pwd\"\n}\n```\n\n*Response*\n\n```\n/workspace\n```\n\n/workspace","model":"claude-sonnet-5"}
