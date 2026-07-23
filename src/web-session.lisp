@@ -91,42 +91,54 @@ DURABLE-SESSION-ID is the shared CLI/web identity. ID remains a browser UI UUID.
                               :model model :backend (backend-name backend) :max-rounds max-rounds)
     session))
 
-(defun web-session-submit (session content)
-  "Run a browser turn through CHAT-SESSION-TURN with the session's log bindings."
-  (let ((trimmed (and (stringp content) (string-trim '(#\Space #\Tab #\Newline #\Return) content))))
-    (when (or (null trimmed) (zerop (length trimmed)))
-      (web-session-record-event session "turn-empty" :state "ready")
-      (return-from web-session-submit nil))
-    (when (eq (web-session-state session) :running)
-      (error "A browser turn is already running for this session."))
-    (incf (web-session-turn-number session))
-    (setf (web-session-state session) :running)
-    (web-session-record-event session "user-message" :text content)
-    (web-session-record-event session "assistant-pending" :state "running")
-    (handler-case
-        (let ((response
-                (call-with-web-session-log-context
-                 session
-                 (lambda ()
-                   (chat-session-turn
-                    (web-session-chat-session session) content
-                    :observer (lambda (kind &rest fields)
-                                (apply #'web-session-record-event session kind fields)))))))
-          (web-session-record-event session "assistant-message"
-                                    :text (completion-response-text response))
-          (setf (web-session-state session) :ready)
-          (web-session-record-event session "turn-completed" :state "ready"
-                                    :text (completion-response-text response))
-          response)
-      (error (condition)
-        (let ((detail (scrub-interaction-log-text (princ-to-string condition))))
-          (note-chat-session-failure (web-session-chat-session session))
-          (setf (web-session-state session) :failed-turn)
-          (web-session-record-event
-           session "turn-failed" :state "failed-turn"
-           :message (format nil "Provider request failed: ~A~%Retry is available."
-                            (if (> (length detail) 600) (subseq detail 0 600) detail)))
-          nil)))))
+(defun web-session-submit (session content &key on-event)
+  "Run a browser turn through CHAT-SESSION-TURN with the session's log bindings.
+
+ON-EVENT, when supplied, is called as (funcall on-event event) immediately
+after each event is appended to the session timeline. The web UI uses this to
+stream tool calls and assistant messages into the chat log as they happen,
+instead of only after the full turn completes. It is invoked from within the
+synchronous provider/tool loop, so a CLOG renderer passed here reaches the
+browser live during the turn."
+  (flet ((record (kind &rest fields)
+           (let ((event (apply #'web-session-record-event session kind fields)))
+             (when on-event
+               (funcall on-event event))
+             event)))
+    (let ((trimmed (and (stringp content) (string-trim '(#\Space #\Tab #\Newline #\Return) content))))
+      (when (or (null trimmed) (zerop (length trimmed)))
+        (record "turn-empty" :state "ready")
+        (return-from web-session-submit nil))
+      (when (eq (web-session-state session) :running)
+        (error "A browser turn is already running for this session."))
+      (incf (web-session-turn-number session))
+      (setf (web-session-state session) :running)
+      (record "user-message" :text content)
+      (record "assistant-pending" :state "running")
+      (handler-case
+          (let ((response
+                  (call-with-web-session-log-context
+                   session
+                   (lambda ()
+                     (chat-session-turn
+                      (web-session-chat-session session) content
+                      :observer (lambda (kind &rest fields)
+                                  (apply #'record kind fields)))))))
+            (record "assistant-message"
+                    :text (completion-response-text response))
+            (setf (web-session-state session) :ready)
+            (record "turn-completed" :state "ready"
+                    :text (completion-response-text response))
+            response)
+        (error (condition)
+          (let ((detail (scrub-interaction-log-text (princ-to-string condition))))
+            (note-chat-session-failure (web-session-chat-session session))
+            (setf (web-session-state session) :failed-turn)
+            (record
+             "turn-failed" :state "failed-turn"
+             :message (format nil "Provider request failed: ~A~%Retry is available."
+                              (if (> (length detail) 600) (subseq detail 0 600) detail)))
+            nil))))))
 
 (defun web-session-clear (session)
   "Start a new browser conversation; prior durable history remains discoverable."

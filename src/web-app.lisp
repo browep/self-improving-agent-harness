@@ -80,8 +80,8 @@ of registration order."
    (list
     (make-completion-response
      :model "web/fake"
-     :tool-calls '((:id "scripted-1" :type "function" :name "echo"
-                    :arguments "{\"message\":\"browser tool flow\"}")))
+     :tool-calls '((:id "scripted-1" :type "function" :name "run_shell"
+                    :arguments "{\"command\":\"echo browser tool flow\"}")))
     (make-completion-response :text "Deterministic tool flow completed."
                               :model "web/fake" :finish-reason "stop"))))
 
@@ -394,8 +394,11 @@ after a turn completes."
                    *web-turn-in-progress-p* t
                    (clog:inner-html state) "Request in progress — waiting for provider response (up to 120 seconds)…"
                    (clog:disabledp send) t)
-             ;; Clear the input and show the user message right away so the
-             ;; UI feels responsive before the synchronous provider call blocks.
+             ;; Clear the input and show the user message right away, before the
+             ;; thinking indicator, so it sits above the indicator in the DOM.
+             ;; web-session-submit also records this as a user-message event; the
+             ;; streaming on-event callback skips it (sequence <= rendered-sequence)
+             ;; so it is never double-rendered.
              (setf (clog:value composer) "")
              (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
                (when (plusp (length trimmed))
@@ -403,8 +406,6 @@ after a turn completes."
                                           (list :kind "user-message"
                                                 :sequence (1+ (length (web-session-events session)))
                                                 :text text))
-                 ;; Skip this event when rendering post-submit events since
-                 ;; we already rendered it manually above.
                  (incf rendered-sequence)
                  (clog:js-execute chat-log
                                   (format nil "~A.scrollTop = ~A.scrollHeight;"
@@ -430,7 +431,30 @@ after a turn completes."
                                          (clog:script-id indicator)))
                (unwind-protect
                     (progn
-                      (web-session-submit session text)
+                      ;; Stream events into the chat log as they happen. The
+                      ;; on-event callback fires from inside the synchronous
+                      ;; provider/tool loop (web-session-submit -> chat-session-turn
+                      ;; -> run-tool-loop), and CLOG sends each DOM update over
+                      ;; the websocket immediately, so tool calls and the final
+                      ;; assistant message appear live instead of only after a
+                      ;; browser refresh. Issue #61.
+                      (web-session-submit
+                       session text
+                       :on-event
+                       (lambda (event)
+                         ;; Skip events already rendered (the user message is
+                         ;; pre-rendered above for correct DOM ordering).
+                         (when (> (getf event :sequence) rendered-sequence)
+                           (when (web-event-visible-in-chat-log-p event)
+                             (web-render-chat-message chat-log event))
+                           (setf rendered-sequence (getf event :sequence))
+                           (clog:js-execute chat-log
+                                            (format nil "~A.scrollTop = ~A.scrollHeight;"
+                                                    (clog:script-id chat-log)
+                                                    (clog:script-id chat-log))))))
+                      ;; Catch any event the callback missed (e.g. an event
+                      ;; recorded after the last on-event return path) so the
+                      ;; transcript is never left incomplete.
                       (dolist (event (web-session-events session))
                         (when (> (getf event :sequence) rendered-sequence)
                           (web-render-chat-message chat-log event)))
