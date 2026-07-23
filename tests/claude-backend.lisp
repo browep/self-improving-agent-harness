@@ -154,7 +154,11 @@
     (ensure-true (not (search "SYSTEM-TEST" prompt))
                  "system content is excluded from ordinary prompt text")
     (ensure-true (search "USER-TEST" prompt)
-                 "user content remains in ordinary prompt text"))
+                 "user content remains in ordinary prompt text")
+    (ensure-true (search "run_shell" (claude-system-prompt request))
+                 "system prompt derives the live MCP tool names")
+    (ensure-true (search "actual native MCP tool call" (claude-system-prompt request))
+                 "system prompt forbids describing an unexecuted tool call"))
 
   (format t "Claude CLI backend tests passed.~%")
   t)

@@ -87,12 +87,29 @@ removed before any formatting, logging, or condition is constructed."
   (let ((value (claude-json-field object name)))
     (and (realp value) value)))
 
+(defun claude-tool-execution-instructions ()
+  "Build Claude-specific native-tool rules from the live Lisp MCP projection.
+
+This is appended to the real Claude system prompt.  It intentionally derives
+its list from CLAUDE-MCP-TOOL-SPECIFICATIONS so the prompt cannot advertise a
+tool that the bridge does not expose."
+  (let ((names (when (fboundp 'claude-mcp-tool-specifications)
+                 (mapcar (lambda (tool) (gethash "name" tool))
+                         (claude-mcp-tool-specifications)))))
+    (format nil
+            "~%~%Claude Code native-tool contract:\n~
+The following Harness tools are live native MCP tools for this invocation: ~{~A~^, ~}.\n~
+When the user requests a named tool, or when you state that you will use a tool, emit the actual native MCP tool call in the same turn before writing any natural-language response. Never answer with an intention, shell snippet, simulated output, or a claim that a call will happen later. Tool names are capabilities, not text formatting. After a tool returns, use its real result in your response."
+            (or names '("no tools")))))
+
 (defun claude-system-prompt (request)
   "Extract the real Harness system prompt from REQUEST for Claude's system channel."
-  (loop for message in (completion-request-messages request)
-        when (and (string= "system" (or (getf message :role) ""))
-                  (stringp (getf message :content)))
-          do (return (getf message :content))))
+  (let ((base (loop for message in (completion-request-messages request)
+                    when (and (string= "system" (or (getf message :role) ""))
+                              (stringp (getf message :content)))
+                      do (return (getf message :content)))))
+    (when base
+      (concatenate 'string base (claude-tool-execution-instructions)))))
 
 (defun claude-request-prompt (request)
   "Render only non-system history for Claude's ordinary prompt channel.

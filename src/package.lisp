@@ -181,6 +181,7 @@
    #:claude-oauth-token-present-p
    #:claude-cli-argv
    #:claude-request-prompt
+   #:claude-system-prompt
    #:claude-parse-response
    #:*claude-command*
    #:*claude-request-timeout-seconds*
