@@ -161,14 +161,17 @@
                  "system prompt forbids describing an unexecuted tool call"))
 
   ;; Native Claude MCP events are display/audit trace, not pending Harness calls.
-  (let* ((stream (format nil "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu-1\",\"name\":\"mcp__harness__run_shell\",\"input\":{\"command\":\"pwd\"}}]}}~%{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu-1\",\"content\":\"/workspace\",\"is_error\":false}]}}~%{\"type\":\"result\",\"result\":\"/workspace\",\"session_id\":\"stream-session\"}"))
+  (let* ((stream (uiop:read-file-string
+                  (asdf:system-relative-pathname
+                   :self-improving-agent-harness
+                   "tests/fixtures/claude-mcp-run-shell-pwd.stream.jsonl")))
          (response (claude-parse-stream-response stream (claude-test-request))))
     (ensure-equal '() (completion-response-tool-calls response)
                   "already executed Claude MCP events are never pending tool calls")
     (let ((event (first (completion-response-native-tool-events response))))
       (ensure-equal "run_shell" (getf event :tool-name)
                     "namespaced MCP tool normalizes to Harness display name")
-      (ensure-equal "/workspace" (getf event :result)
+      (ensure-equal (format nil "/workspace~%") (getf event :result)
                     "tool result joins with its tool_use id")))
 
   (format t "Claude CLI backend tests passed.~%")

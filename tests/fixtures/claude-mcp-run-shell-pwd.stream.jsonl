@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","tools":["mcp__harness__run_shell"],"mcp_servers":[{"name":"harness","status":"connected"}],"model":"claude-sonnet-5","claude_code_version":"2.1.218"}
+{"type":"assistant","session_id":"captured-claude-session","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_captured_pwd","name":"mcp__harness__run_shell","input":{"command":"pwd"},"caller":{"type":"direct"}}]}}
+{"type":"user","session_id":"captured-claude-session","message":{"role":"user","content":[{"tool_use_id":"toolu_captured_pwd","type":"tool_result","content":[{"type":"text","text":"/workspace\n"}]}]}}
+{"type":"assistant","session_id":"captured-claude-session","message":{"role":"assistant","content":[{"type":"text","text":"/workspace"}]}}
+{"type":"result","subtype":"success","session_id":"captured-claude-session","result":"/workspace","model":"claude-sonnet-5","usage":{"input_tokens":4,"output_tokens":63}}
