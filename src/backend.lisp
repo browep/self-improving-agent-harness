@@ -32,12 +32,13 @@ provider-neutral controls such as temperature or maximum output tokens."
 
 (defstruct (completion-response
             (:constructor make-completion-response
-                (&key text model raw tool-calls finish-reason provider-request-id usage)))
+                (&key text model raw tool-calls native-tool-events finish-reason provider-request-id usage)))
   "A provider-neutral response plus unmodified provider data in RAW."
   text
   model
   raw
   tool-calls
+  native-tool-events
   finish-reason
   provider-request-id
   usage)
@@ -875,6 +876,27 @@ visible even when the process is later killed."
                                        (complete backend current-request))))
                        (log-provider-response current-request round response
                                               (elapsed-seconds-since start))
+                       ;; Claude Code may execute MCP tools inside its child process.
+                       ;; These are display/audit events only: never route them through
+                       ;; OPENROUTER-TOOL-RESULT-MESSAGE or the command would run twice.
+                       (dolist (event (completion-response-native-tool-events response))
+                         (emit-observer "tool-call-started"
+                                        :round round
+                                        :tool-call-id (getf event :tool-call-id)
+                                        :tool-name (getf event :tool-name)
+                                        :arguments (getf event :arguments))
+                         (emit-observer "tool-call-completed"
+                                        :round round
+                                        :tool-call-id (getf event :tool-call-id)
+                                        :tool-name (getf event :tool-name)
+                                        :result (getf event :result))
+                         (log-interaction (if (getf event :error-p) :error :info)
+                                          (if (getf event :error-p) "tool-failed" "tool-completed")
+                                          :tool (getf event :tool-name)
+                                          :tool-call-id (getf event :tool-call-id)
+                                          :arguments (getf event :arguments)
+                                          :tool-result (getf event :result)
+                                          :round round))
                        (cond
                          ((completion-response-tool-calls response)
                           (when (>= round effective-max-rounds)

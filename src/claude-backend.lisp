@@ -156,7 +156,7 @@ ambiguous for durable sessions."
         (system-prompt (claude-system-prompt request)))
     (append *claude-command*
             (list "--tools" "" "-p" (claude-request-prompt request)
-                  "--output-format" "json"
+                  "--output-format" "stream-json" "--verbose"
                   "--model" (or (completion-request-model request) *claude-default-model*))
             (when (and (stringp system-prompt) (plusp (length system-prompt)))
               (list "--append-system-prompt" system-prompt))
@@ -223,6 +223,76 @@ logged, stored, returned, or included in errors."
       (claude-error "could not launch the Claude CLI (~A). Ensure the pinned `claude` binary is installed in the runtime image."
                     (type-of condition)))))
 
+(defun claude-json-encode (value)
+  (with-output-to-string (stream) (yason:encode value stream)))
+
+(defun claude-stream-content-text (content)
+  (cond ((stringp content) content)
+        ((or (listp content) (vectorp content))
+         (with-output-to-string (out)
+           (dolist (part (openrouter-list content))
+             (let ((text (and (hash-table-p part) (gethash "text" part))))
+               (when (stringp text) (write-string text out))))))
+        (t "")))
+
+(defun claude-parse-stream-response (ndjson request)
+  "Normalize Claude stream-json without re-executing its already-run MCP tools."
+  (handler-case
+      (let ((records '()) (uses '()) (results (make-hash-table :test #'equal))
+            (final nil))
+        (with-input-from-string (input ndjson)
+          (loop for line = (read-line input nil nil) while line
+                unless (zerop (length (string-trim '(#\Space #\Tab #\Return) line)))
+                  do (push (yason:parse line) records)))
+        (setf records (nreverse records))
+        (dolist (record records)
+          (let ((type (claude-json-field record "type"))
+                (message (claude-json-field record "message")))
+            (cond
+              ((string= type "result") (setf final record))
+              ((and (string= type "assistant") (hash-table-p message))
+               (dolist (part (openrouter-list (claude-json-field message "content")))
+                 (when (and (hash-table-p part)
+                            (string= (or (gethash "type" part) "") "tool_use")
+                            (let ((name (gethash "name" part)))
+                              (and (stringp name) (uiop:string-prefix-p "mcp__harness__" name))))
+                   (push (list :tool-call-id (gethash "id" part)
+                               :tool-name (subseq (gethash "name" part) (length "mcp__harness__"))
+                               :arguments (claude-json-encode (gethash "input" part)))
+                         uses))))
+              ((and (string= type "user") (hash-table-p message))
+               (dolist (part (openrouter-list (claude-json-field message "content")))
+                 (when (and (hash-table-p part)
+                            (string= (or (gethash "type" part) "") "tool_result"))
+                   (setf (gethash (gethash "tool_use_id" part) results)
+                         (list :result (claude-stream-content-text (gethash "content" part))
+                               :error-p (not (null (gethash "is_error" part)))))))))))
+        (unless final (claude-error "Claude stream-json output lacked a final result record."))
+        (let* ((result (claude-json-field final "result"))
+               (session-id (claude-json-field final "session_id"))
+               (model (or (claude-json-field final "model") (completion-request-model request)
+                          *claude-default-model*))
+               (usage-object (claude-json-field final "usage"))
+               (input (and usage-object (claude-json-number usage-object "input_tokens")))
+               (output (and usage-object (claude-json-number usage-object "output_tokens")))
+               (cost (claude-json-number final "total_cost_usd"))
+               (usage (append (when input (list :prompt-tokens input))
+                              (when output (list :completion-tokens output))
+                              (when (and input output) (list :total-tokens (+ input output)))
+                              (when cost (list :cost-usd cost))))
+               (events (mapcar (lambda (use)
+                                 (append use (gethash (getf use :tool-call-id) results
+                                                      (list :result "" :error-p t))))
+                               (nreverse uses))))
+          (unless (stringp result) (claude-error "Claude stream result lacked string result."))
+          (make-completion-response :text result :model model :raw records :tool-calls '()
+                                    :native-tool-events events :finish-reason "stop"
+                                    :provider-request-id (and (stringp session-id) session-id)
+                                    :usage usage)))
+    (claude-backend-error (condition) (error condition))
+    (error (condition)
+      (claude-error "could not parse Claude stream-json output (~A)." (type-of condition)))))
+
 (defun claude-parse-response (json-text request)
   "Convert Claude Code `--output-format json` output into a completion response.
 
@@ -271,12 +341,11 @@ usage absent when values are unavailable rather than fabricating accounting."
                  :session-id session-id))
 
 (defmethod complete ((backend claude-backend) request)
-  "Run one safe, tool-free Claude Code CLI turn and retain its returned session id.
+  "Run one Claude Code CLI agent turn and retain its returned session id.
 
-Claude-native tools are deliberately disabled via an empty `--tools` list; this
-adapter emits no fabricated harness tool calls. A future implementation may
-enable structured stream-json mediation only after its event contract is proven
-sufficient."
+Native MCP calls execute inside Claude's child bridge. Stream-json supplies their
+completed lifecycle trace for Harness logging/UI only; the handlers are never run
+a second time in the parent tool loop."
   (let* ((token (require-claude-oauth-token))
          (argv (claude-cli-argv request :session-id (claude-backend-session-id backend)))
          (runner (claude-backend-runner backend)))
@@ -285,7 +354,7 @@ sufficient."
       (unless (and (integerp status) (zerop status))
         (claude-error "Claude CLI exited with status ~A: ~A. Verify CLAUDE_CODE_OAUTH_TOKEN was generated with `claude setup-token` and replace it if authentication failed."
                       status (claude-cli-error-diagnostic stdout stderr token)))
-      (let ((response (claude-parse-response stdout request)))
+      (let ((response (claude-parse-stream-response stdout request)))
         (setf (claude-backend-session-id backend)
               (completion-response-provider-request-id response))
         (log-interaction :info "claude-turn-completed"

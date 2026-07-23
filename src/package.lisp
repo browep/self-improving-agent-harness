@@ -124,6 +124,7 @@
    #:completion-response-model
    #:completion-response-raw
    #:completion-response-tool-calls
+   #:completion-response-native-tool-events
    #:completion-response-finish-reason
    #:completion-response-provider-request-id
    #:completion-response-usage
@@ -183,6 +184,7 @@
    #:claude-request-prompt
    #:claude-system-prompt
    #:claude-parse-response
+   #:claude-parse-stream-response
    #:*claude-command*
    #:*claude-request-timeout-seconds*
    #:verify-claude-oauth

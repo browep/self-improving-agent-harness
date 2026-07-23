@@ -58,8 +58,8 @@
                                   (incf calls)
                                   (setf seen-argv argv seen-token token)
                                   (if (= calls 1)
-                                      (values "{\"result\":\"first response\",\"session_id\":\"claude-session-1\",\"model\":\"sonnet\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}" "" 0)
-                                      (values "{\"result\":\"resumed response\",\"session_id\":\"claude-session-1\",\"model\":\"sonnet\"}" "" 0)))
+                                      (values "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"first response\",\"session_id\":\"claude-session-1\",\"model\":\"sonnet\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}" "" 0)
+                                      (values "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"resumed response\",\"session_id\":\"claude-session-1\",\"model\":\"sonnet\"}" "" 0)))
                         :timeout 3))
               (first (complete backend (claude-test-request)))
               (second (complete backend (claude-test-request "continue"))))
@@ -159,6 +159,17 @@
                  "system prompt derives exact namespaced live MCP tool names")
     (ensure-true (search "actual native MCP tool call" (claude-system-prompt request))
                  "system prompt forbids describing an unexecuted tool call"))
+
+  ;; Native Claude MCP events are display/audit trace, not pending Harness calls.
+  (let* ((stream (format nil "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu-1\",\"name\":\"mcp__harness__run_shell\",\"input\":{\"command\":\"pwd\"}}]}}~%{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu-1\",\"content\":\"/workspace\",\"is_error\":false}]}}~%{\"type\":\"result\",\"result\":\"/workspace\",\"session_id\":\"stream-session\"}"))
+         (response (claude-parse-stream-response stream (claude-test-request))))
+    (ensure-equal '() (completion-response-tool-calls response)
+                  "already executed Claude MCP events are never pending tool calls")
+    (let ((event (first (completion-response-native-tool-events response))))
+      (ensure-equal "run_shell" (getf event :tool-name)
+                    "namespaced MCP tool normalizes to Harness display name")
+      (ensure-equal "/workspace" (getf event :result)
+                    "tool result joins with its tool_use id")))
 
   (format t "Claude CLI backend tests passed.~%")
   t)
