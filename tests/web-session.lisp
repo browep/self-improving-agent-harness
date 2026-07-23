@@ -67,6 +67,44 @@
                     "browser tool completion remains linked to its source call")
       (ensure-equal "echo: from browser" (getf tool-result :result)
                     "browser tool completion preserves the local trusted result")))
+  ;; Claude native events are replayed to the existing browser lifecycle without
+  ;; presenting pending tool calls or calling the local handler a second time.
+  (let* ((handler-calls 0)
+         (response (make-completion-response
+                    :text "fixture final" :model "claude/fixture"
+                    :native-tool-events
+                    (list (list :tool-call-id "toolu_captured_1"
+                                :tool-name "run_shell"
+                                :arguments "{\"command\":\"pwd\"}"
+                                :result (format nil "/workspace~%")
+                                :error-p nil))))
+         (backend (make-instance 'scripted-backend :name "claude-fixture"
+                                 :responses (list response)))
+         (session (make-web-session
+                   :backend backend :model "claude/fixture"
+                   :handlers `(("run_shell" . ,(lambda (arguments)
+                                                  (declare (ignore arguments))
+                                                  (incf handler-calls)
+                                                  "must not run"))))))
+    (web-session-submit session "fixture-backed Claude tool turn")
+    (ensure-equal '("session-started" "user-message" "assistant-pending"
+                    "provider-round-started" "provider-round-completed"
+                    "tool-call-started" "tool-call-completed"
+                    "assistant-message" "turn-completed")
+                  (mapcar #'web-event-kind (web-session-events session))
+                  "Claude native events use the same CLOG tool-card lifecycle as Synthetic")
+    (ensure-equal 0 handler-calls
+                  "replayed native Claude events never dispatch a second local handler call")
+    (let ((started (find "tool-call-started" (web-session-events session)
+                         :key #'web-event-kind :test #'string=))
+          (completed (find "tool-call-completed" (web-session-events session)
+                           :key #'web-event-kind :test #'string=)))
+      (ensure-equal "run_shell" (getf started :tool-name)
+                    "tool card start displays normalized Harness tool name")
+      (ensure-equal "toolu_captured_1" (getf completed :tool-call-id)
+                    "tool card completion remains correlated by native Claude ID")
+      (ensure-equal (format nil "/workspace~%") (getf completed :result)
+                    "tool card completion preserves fixture result text")))
   (ensure-true (web-event-visible-in-chat-log-p '(:kind "user-message"))
                "user messages belong in the browser chat log")
   (ensure-true (web-event-visible-in-chat-log-p '(:kind "assistant-message"))

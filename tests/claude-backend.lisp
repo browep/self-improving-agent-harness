@@ -174,5 +174,44 @@
       (ensure-equal (format nil "/workspace~%") (getf event :result)
                     "tool result joins with its tool_use id")))
 
+  ;; Captured real Claude traces exercise parser behavior offline: no tool use,
+  ;; ordered multiple uses, and a non-zero shell exit returned as normal MCP content.
+  (flet ((fixture-response (name)
+           (claude-parse-stream-response
+            (uiop:read-file-string
+             (asdf:system-relative-pathname
+              :self-improving-agent-harness
+              (format nil "tests/fixtures/claude-mcp-~A.stream.jsonl" name)))
+            (claude-test-request))))
+    (let ((response (fixture-response "no-tool")))
+      (ensure-equal '() (completion-response-native-tool-events response)
+                    "a real no-tool Claude trace emits no Harness lifecycle events")
+      (ensure-equal "no-tool-ok" (completion-response-text response)
+                    "no-tool fixture preserves terminal text"))
+    (let ((response (fixture-response "multi")))
+      (ensure-equal '() (completion-response-tool-calls response)
+                    "real multi-tool events are never pending Harness calls")
+      (let ((events (completion-response-native-tool-events response)))
+        (ensure-equal 2 (length events) "two captured tool uses normalize to two events")
+        (ensure-equal '("toolu_captured_1" "toolu_captured_2")
+                      (mapcar (lambda (event) (getf event :tool-call-id)) events)
+                      "tool IDs and source order are retained")
+        (ensure-equal '("pwd" "printf second-tool-ok")
+                      (mapcar (lambda (event)
+                                (gethash "command" (yason:parse (getf event :arguments))))
+                              events)
+                      "each captured tool input remains correlated with its ID")
+        (ensure-equal (list (format nil "/workspace~%") "second-tool-ok")
+                      (mapcar (lambda (event) (getf event :result)) events)
+                      "typed tool-result blocks retain result order and line breaks")))
+    (let* ((response (fixture-response "failure"))
+           (event (first (completion-response-native-tool-events response))))
+      (ensure-equal 1 (length (completion-response-native-tool-events response))
+                    "the failure trace contains one native call")
+      (ensure-true (search "exit status 1" (getf event :result))
+                   "non-zero command output is preserved for the failure card")
+      (ensure-true (not (getf event :error-p))
+                   "a shell non-zero result is not fabricated as protocol is_error")))
+
   (format t "Claude CLI backend tests passed.~%")
   t)
