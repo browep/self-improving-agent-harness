@@ -63,14 +63,18 @@ or blank."
 (defparameter *claude-sdk-messages-url* "https://api.anthropic.com/v1/messages"
   "The Anthropic Messages API endpoint this backend posts to.")
 
+(defparameter *claude-sdk-http-method* :post
+  "The observed HTTP method for the Claude SDK Messages transport.")
+
 (defparameter *claude-sdk-anthropic-version* "2023-06-01"
   "Captured `anthropic-version` header value.")
 
-(defparameter *claude-sdk-anthropic-beta* "oauth-2025-04-20"
-  "Captured `anthropic-beta` header value required for OAuth (setup-token) auth.")
+(defparameter *claude-sdk-anthropic-beta*
+  "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,structured-outputs-2025-12-15,cache-diagnosis-2026-04-07"
+  "Captured TypeScript Agent SDK `anthropic-beta` header value for OAuth auth.")
 
-(defparameter *claude-sdk-user-agent* "claude-cli/2.1.218 (external, sdk-cli)"
-  "Captured `User-Agent` header value, matching the pinned Claude Code CLI version.")
+(defparameter *claude-sdk-user-agent* "claude-cli/2.1.218 (external, sdk-ts, agent-sdk/0.3.218)"
+  "Captured TypeScript Agent SDK User-Agent value.")
 
 (defparameter *claude-sdk-x-app* "cli"
   "Captured `x-app` header value.")

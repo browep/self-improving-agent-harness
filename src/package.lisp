@@ -210,6 +210,7 @@
    #:claude-sdk-response-from-body
    #:claude-sdk-live-transport
    #:*claude-sdk-messages-url*
+   #:*claude-sdk-http-method*
    #:*claude-sdk-anthropic-version*
    #:*claude-sdk-anthropic-beta*
    #:*claude-sdk-user-agent*

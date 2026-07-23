@@ -1,0 +1,108 @@
+{
+  "fixture_kind": "sanitized_claude_sdk_transport_contract",
+  "provenance": {
+    "evidence": "observed_official_client_transport",
+    "capture_policy": "allowlisted_nonsecret_metadata_and_json_shapes_only"
+  },
+  "request": {
+    "method": "POST",
+    "host": "api.anthropic.com",
+    "path": "/v1/messages",
+    "client": "claude-code",
+    "client_version": "2.1.218",
+    "client_language": "typescript",
+    "safe_protocol_headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "user-agent": "claude-cli/2.1.218 (external, sdk-ts, agent-sdk/0.3.218)",
+      "anthropic-version": "2023-06-01",
+      "x-app": "cli",
+      "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,structured-outputs-2025-12-15,cache-diagnosis-2026-04-07"
+    },
+    "json_shape": {
+      "type": "object",
+      "properties": {
+        "model": { "type": "string" },
+        "max_tokens": { "type": "integer" },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": { "type": "string" },
+              "content": { "type": "string" }
+            }
+          }
+        },
+        "stream": { "type": "boolean" },
+        "system": { "type": "string" }
+      }
+    }
+  },
+  "response": {
+    "status_code": 200,
+    "content_type": "text/event-stream",
+    "sse_json_shape": {
+      "type": "object",
+      "event_types": {
+        "message_start": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "message": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "model": { "type": "string" },
+                "usage": {
+                  "type": "object",
+                  "properties": {
+                    "input_tokens": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "content_block_delta": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "index": { "type": "integer" },
+            "delta": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string" },
+                "text": { "type": "string" }
+              }
+            }
+          }
+        },
+        "message_delta": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "delta": {
+              "type": "object",
+              "properties": {
+                "stop_reason": { "type": "string" }
+              }
+            },
+            "usage": {
+              "type": "object",
+              "properties": {
+                "output_tokens": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "message_stop": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

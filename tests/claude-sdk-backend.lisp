@@ -114,8 +114,8 @@ can assert on exactly what COMPLETE tried to send."
                   "Content-Type is application/json")
     (ensure-equal *claude-sdk-user-agent* (cdr (assoc "User-Agent" headers :test #'string-equal))
                   "User-Agent matches the captured claude-cli identity")
-    (ensure-equal "claude-cli/2.1.218 (external, sdk-cli)" *claude-sdk-user-agent*
-                  "the captured user-agent string is exact")
+    (ensure-equal "claude-cli/2.1.218 (external, sdk-ts, agent-sdk/0.3.218)" *claude-sdk-user-agent*
+                  "the captured TypeScript SDK user-agent string is exact")
     (ensure-equal *claude-sdk-anthropic-version* (cdr (assoc "anthropic-version" headers :test #'string-equal))
                   "anthropic-version matches the captured contract")
     (ensure-equal "2023-06-01" *claude-sdk-anthropic-version*
@@ -124,8 +124,8 @@ can assert on exactly what COMPLETE tried to send."
                   "x-app identifies as cli")
     (ensure-equal *claude-sdk-anthropic-beta* (cdr (assoc "anthropic-beta" headers :test #'string-equal))
                   "anthropic-beta matches the captured contract")
-    (ensure-equal "oauth-2025-04-20" *claude-sdk-anthropic-beta*
-                  "anthropic-beta is the captured oauth-2025-04-20"))
+    (ensure-equal "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,structured-outputs-2025-12-15,cache-diagnosis-2026-04-07" *claude-sdk-anthropic-beta*
+                  "anthropic-beta matches the captured TypeScript SDK contract"))
   (ensure-equal "https://api.anthropic.com/v1/messages" *claude-sdk-messages-url*
                 "the Messages endpoint is the captured URL")
 
@@ -422,6 +422,60 @@ data: {\"type\":\"message_stop\"}
            (ensure-true (not (search "sdk-fixture-token-should-never-leak"
                                     (claude-sdk-backend-error-reason condition)))
                         "a raw transport error message never echoes the OAuth token"))))))
+
+  ;; ---- Checked-in sanitized observed SDK contract: this fixture records only
+  ;; allowlisted nonsecret protocol metadata plus JSON key/type shapes. It
+  ;; deliberately contains no authorization/cookie fields, body examples, or
+  ;; prompt/response values. The direct backend's safe wire constants must
+  ;; remain aligned with this offline compatibility evidence. ----
+  (let* ((fixture-text (claude-sdk-fixture-string "tests/fixtures/claude-sdk-contract.json"))
+         (fixture (yason:parse fixture-text))
+         (request (gethash "request" fixture))
+         (response (gethash "response" fixture))
+         (headers (gethash "safe_protocol_headers" request))
+         (credential-markers '("authorization" "bearer " "cookie" "x-api-key"
+                               "api_key" "api-key" "claude_code_oauth_token"
+                               "anthropic_api_key" "sk-ant-")))
+    (dolist (marker credential-markers)
+      (ensure-true (not (search marker fixture-text :test #'char-equal))
+                   "sanitized Claude SDK contract fixture contains no credential marker"))
+    (ensure-equal "POST" (gethash "method" request)
+                  "contract fixture records the observed POST method")
+    (ensure-equal "api.anthropic.com" (gethash "host" request)
+                  "contract fixture records the observed Messages host")
+    (ensure-equal "/v1/messages" (gethash "path" request)
+                  "contract fixture records the observed Messages path")
+    (ensure-equal "claude-code" (gethash "client" request)
+                  "contract fixture records the official client identity")
+    (ensure-equal "2.1.218" (gethash "client_version" request)
+                  "contract fixture records the observed official client version")
+    (ensure-equal "typescript" (gethash "client_language" request)
+                  "contract fixture records the observed official client language")
+    (ensure-equal "application/json" (gethash "accept" headers)
+                  "contract fixture records the safe Accept protocol value")
+    (ensure-equal "application/json" (gethash "content-type" headers)
+                  "contract fixture records the safe Content-Type protocol value")
+    (ensure-equal *claude-sdk-user-agent* (gethash "user-agent" headers)
+                  "backend User-Agent constant conforms to the contract fixture")
+    (ensure-equal *claude-sdk-anthropic-version* (gethash "anthropic-version" headers)
+                  "backend anthropic-version constant conforms to the contract fixture")
+    (ensure-equal *claude-sdk-x-app* (gethash "x-app" headers)
+                  "backend x-app constant conforms to the contract fixture")
+    (ensure-equal *claude-sdk-anthropic-beta* (gethash "anthropic-beta" headers)
+                  "backend complete beta-list constant conforms to the contract fixture")
+    (ensure-equal "POST" (string-upcase (symbol-name *claude-sdk-http-method*))
+                  "backend HTTP method constant conforms to the contract fixture")
+    (ensure-equal (format nil "https://~A~A" (gethash "host" request) (gethash "path" request))
+                  *claude-sdk-messages-url*
+                  "backend Messages URL constant conforms to the contract fixture")
+    (ensure-equal 200 (gethash "status_code" response)
+                  "contract fixture records the observed success status")
+    (ensure-equal "text/event-stream" (gethash "content_type" response)
+                  "contract fixture records the observed SSE content type")
+    (ensure-true (hash-table-p (gethash "json_shape" request))
+                 "contract fixture describes the request as JSON key/type shapes")
+    (ensure-true (hash-table-p (gethash "sse_json_shape" response))
+                 "contract fixture describes SSE events as JSON key/type shapes"))
 
   (format t "Claude-sdk direct backend transport tests passed.~%")
   t)
