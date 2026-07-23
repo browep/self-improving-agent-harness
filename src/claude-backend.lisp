@@ -87,39 +87,69 @@ removed before any formatting, logging, or condition is constructed."
   (let ((value (claude-json-field object name)))
     (and (realp value) value)))
 
-(defun claude-request-prompt (request)
-  "Flatten harness messages into an explicit role-labelled Claude CLI prompt.
+(defun claude-system-prompt (request)
+  "Extract the real Harness system prompt from REQUEST for Claude's system channel."
+  (loop for message in (completion-request-messages request)
+        when (and (string= "system" (or (getf message :role) ""))
+                  (stringp (getf message :content)))
+          do (return (getf message :content))))
 
-Claude Code owns its own conversation persistence; we still include the harness
-history in each first/resumed request so a failed or unavailable resume never
-silently loses context."
+(defun claude-request-prompt (request)
+  "Render only non-system history for Claude's ordinary prompt channel.
+
+The Harness system message must travel through `--append-system-prompt`, never
+as a textual `[system]` marker inside untrusted user content."
   (with-output-to-string (out)
     (dolist (message (completion-request-messages request))
       (let ((role (getf message :role))
             (content (getf message :content)))
-        (when (and (stringp content) (plusp (length content)))
-          (format out "[~A]~%~A~%~%" (or role "user") content))))))
+        (when (and (not (string= "system" (or role "")))
+                   (stringp content) (plusp (length content)))
+          (format out "[~A message]~%~A~%~%" (or role "user") content))))))
+
+(defun claude-mcp-allowed-tools ()
+  "Return the generated native Claude permission names for Harness MCP tools."
+  (when (fboundp 'claude-mcp-tool-specifications)
+    (format nil "~{~A~^,~}"
+            (mapcar (lambda (tool)
+                      (format nil "mcp__harness__~A" (gethash "name" tool)))
+                    (claude-mcp-tool-specifications)))))
+
+(defun claude-mcp-config ()
+  "Return generated MCP config JSON once the Lisp bridge is loaded."
+  (when (fboundp 'claude-mcp-config-json)
+    (claude-mcp-config-json)))
 
 (defun claude-cli-argv (request &key session-id json-schema)
   "Build safe argv for one Claude Code non-interactive invocation.
 
-The OAuth token is deliberately absent from argv. An empty `--tools` list
-disables the Claude-native tool set so this adapter cannot bypass the harness
-tool loop.
+The OAuth token is deliberately absent from argv. The Harness MCP config and
+allowed-tool names are generated from Lisp at runtime; no external schema/config
+can drift. An empty `--tools` list disables Claude built-ins while leaving only
+the generated Harness MCP server available.
 
 Do not use `--bare`: Claude Code documents bare mode as bypassing OAuth/keychain
 credential reads in favor of API-key helpers, which is incompatible with this
 setup-token OAuth-only backend. A Claude CLI session id, if known, is resumed
 explicitly rather than using `--continue`, which is directory-scoped and
 ambiguous for durable sessions."
-  (append *claude-command*
-          (list "--tools" "" "-p" (claude-request-prompt request)
-                "--output-format" "json"
-                "--model" (or (completion-request-model request) *claude-default-model*))
-          (when (and (stringp session-id) (plusp (length session-id)))
-            (list "--resume" session-id))
-          (when (and (stringp json-schema) (plusp (length json-schema)))
-            (list "--json-schema" json-schema))))
+  (let ((mcp-config (claude-mcp-config))
+        (allowed-tools (claude-mcp-allowed-tools))
+        (system-prompt (claude-system-prompt request)))
+    (append *claude-command*
+            (list "--tools" "" "-p" (claude-request-prompt request)
+                  "--output-format" "json"
+                  "--model" (or (completion-request-model request) *claude-default-model*))
+            (when (and (stringp system-prompt) (plusp (length system-prompt)))
+              (list "--append-system-prompt" system-prompt))
+            (when (and (stringp mcp-config) (plusp (length mcp-config)))
+              (list "--mcp-config" mcp-config "--strict-mcp-config"))
+            (when (and (stringp allowed-tools) (plusp (length allowed-tools)))
+              (list "--allowedTools" allowed-tools))
+            (when (and (stringp session-id) (plusp (length session-id)))
+              (list "--resume" session-id))
+            (when (and (stringp json-schema) (plusp (length json-schema)))
+              (list "--json-schema" json-schema)))))
 
 (defun call-with-claude-timeout (timeout thunk)
   (if (and (realp timeout) (plusp timeout))

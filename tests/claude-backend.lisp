@@ -83,6 +83,10 @@
                       "Claude invocation requests structured JSON")
          (ensure-true (member "--tools" seen-argv :test #'string=)
                       "Claude invocation disables native tools")
+         (ensure-true (member "--mcp-config" seen-argv :test #'string=)
+                      "Claude invocation receives Lisp-generated MCP config")
+         (ensure-true (member "--strict-mcp-config" seen-argv :test #'string=)
+                      "Claude invocation ignores ambient MCP configuration")
          (ensure-true (not (member "--bare" seen-argv :test #'string=))
                       "OAuth setup-token invocation never uses incompatible bare mode")
          (ensure-true (not (member seen-token seen-argv :test #'string=))
@@ -113,5 +117,40 @@
                           "structured Claude error result is surfaced safely")
              (ensure-true (not (search "test-oauth-token" message))
                           "child diagnostic redaction removes OAuth token")))))))
+  ;; MCP schemas must be a projection of the live Lisp definitions, never a
+  ;; second checked-in registry that can drift.
+  (let ((mcp-tools (claude-mcp-tool-specifications))
+        (chat-tools (chat-tool-definitions)))
+    (ensure-equal (mapcar (lambda (definition) (getf (getf definition :function) :name)) chat-tools)
+                  (mapcar (lambda (tool) (gethash "name" tool)) mcp-tools)
+                  "MCP tool names are projected from chat-tool-definitions")
+    (ensure-equal
+     (mapcar (lambda (definition)
+               (with-output-to-string (stream)
+                 (yason:encode (self-improving-agent-harness::openrouter-json-value (getf (getf definition :function) :parameters)) stream)))
+             chat-tools)
+     (mapcar (lambda (tool)
+               (with-output-to-string (stream)
+                 (yason:encode (gethash "inputSchema" tool) stream)))
+             mcp-tools)
+     "MCP input schemas are projected from chat-tool-definitions")
+    (ensure-true (search "mcpServers" (claude-mcp-config-json))
+                 "Claude MCP config is generated in Lisp"))
+
+  ;; System content travels through Claude's real system channel and cannot be
+  ;; mistaken for an injected `[system]` user-text block.
+  (let* ((request (make-completion-request
+                   :model "sonnet"
+                   :messages (list (list :role "system" :content "SYSTEM-TEST")
+                                   (list :role "user" :content "USER-TEST"))))
+         (argv (claude-cli-argv request))
+         (prompt (claude-request-prompt request)))
+    (ensure-true (member "--append-system-prompt" argv :test #'string=)
+                 "Claude receives a native system-prompt argument")
+    (ensure-true (not (search "SYSTEM-TEST" prompt))
+                 "system content is excluded from ordinary prompt text")
+    (ensure-true (search "USER-TEST" prompt)
+                 "user content remains in ordinary prompt text"))
+
   (format t "Claude CLI backend tests passed.~%")
   t)

@@ -180,6 +180,7 @@
    #:claude-backend-session-id
    #:claude-oauth-token-present-p
    #:claude-cli-argv
+   #:claude-request-prompt
    #:claude-parse-response
    #:*claude-command*
    #:*claude-request-timeout-seconds*
@@ -187,6 +188,10 @@
    #:claude-verification-evidence
    #:format-claude-verification-evidence
    #:*claude-verify-prompt*
+   ;; Harness-owned Claude MCP bridge (schemas project from Lisp definitions)
+   #:claude-mcp-tool-specifications
+   #:claude-mcp-config-json
+   #:claude-mcp-serve
    #:openrouter-backend
    #:make-openrouter-backend
    #:openrouter-backend-base-url
@@ -219,6 +224,7 @@
    #:load-workspace-env-file
    #:handle-interactive-command
    #:chat-options
+   #:chat-tool-definitions
    #:chat-handlers
    #:shell-tool
    #:reload-tool

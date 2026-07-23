@@ -24,6 +24,7 @@
                (:file "src/tooling/browser/harness-web-ui/harness-web-ui-tool")
                (:file "src/chat-turn-report")
                (:file "src/chat-cli")
+               (:file "src/claude-mcp")
                (:file "src/main"))
   :in-order-to ((test-op (test-op "self-improving-agent-harness/tests"))))
 

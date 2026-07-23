@@ -1,0 +1,8 @@
+#!/bin/sh
+# Ephemeral stdio MCP bridge used only by the Claude Code backend.
+# Tool definitions and dispatch remain in Lisp (chat-tool-definitions/chat-handlers).
+set -eu
+exec sbcl --noinform --disable-debugger --non-interactive \
+  --load /opt/quicklisp/setup.lisp \
+  --eval '(let ((*standard-output* *error-output*)) (asdf:load-asd #P"/workspace/self-improving-agent-harness.asd") (asdf:load-system :self-improving-agent-harness))' \
+  --eval '(self-improving-agent-harness::claude-mcp-serve)'
