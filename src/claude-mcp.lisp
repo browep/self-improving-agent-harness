@@ -43,8 +43,10 @@ as a project/user configuration file and contains neither credentials nor tool
 schemas.  Tool schemas arrive over MCP from CLAUDE-MCP-TOOL-SPECIFICATIONS."
   (let* ((command *claude-mcp-bridge-command*)
          (server (claude-mcp-object
+                  "type" "stdio"
                   "command" (first command)
-                  "args" (coerce (rest command) 'vector)))
+                  "args" (coerce (rest command) 'vector)
+                  "alwaysLoad" t))
          (servers (claude-mcp-object *claude-mcp-server-name* server))
          (config (claude-mcp-object "mcpServers" servers)))
     (with-output-to-string (stream) (yason:encode config stream))))

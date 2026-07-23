@@ -134,8 +134,12 @@
                  (yason:encode (gethash "inputSchema" tool) stream)))
              mcp-tools)
      "MCP input schemas are projected from chat-tool-definitions")
-    (ensure-true (search "mcpServers" (claude-mcp-config-json))
-                 "Claude MCP config is generated in Lisp"))
+    (let* ((config (yason:parse (claude-mcp-config-json)))
+           (server (gethash "harness" (gethash "mcpServers" config))))
+      (ensure-equal "stdio" (gethash "type" server)
+                    "generated MCP config declares stdio transport")
+      (ensure-true (gethash "alwaysLoad" server)
+                   "generated MCP server always loads for a Claude invocation")))
 
   ;; System content travels through Claude's real system channel and cannot be
   ;; mistaken for an injected `[system]` user-text block.
