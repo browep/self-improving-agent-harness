@@ -113,25 +113,24 @@ When the user asks for a Harness tool such as run_shell, invoke its exact mcp__h
       (concatenate 'string base (claude-tool-execution-instructions)))))
 
 (defun claude-request-prompt (request)
-  "Render only non-system history for Claude's ordinary prompt channel.
+  "Send the newest user turn directly to Claude's prompt channel.
 
-The Harness system message must travel through `--append-system-prompt`, never
-as a textual `[system]` marker inside untrusted user content."
-  (with-output-to-string (out)
-    (dolist (message (completion-request-messages request))
-      (let ((role (getf message :role))
-            (content (getf message :content)))
-        (when (and (not (string= "system" (or role "")))
-                   (stringp content) (plusp (length content)))
-          (format out "[~A message]~%~A~%~%" (or role "user") content))))))
+Claude Code owns provider-side history through --resume. Role-label wrappers made
+native MCP calls look like text to the agent; the current user instruction must
+remain an ordinary CLI prompt, not serialized transcript markup."
+  (or (loop for message in (reverse (completion-request-messages request))
+            when (and (string= "user" (or (getf message :role) ""))
+                      (stringp (getf message :content))
+                      (plusp (length (getf message :content))))
+              do (return (getf message :content)))
+      ""))
 
 (defun claude-mcp-allowed-tools ()
-  "Return the generated native Claude permission names for Harness MCP tools."
+  "Return generated native Claude permission identifiers as separate argv values." 
   (when (fboundp 'claude-mcp-tool-specifications)
-    (format nil "~{~A~^,~}"
-            (mapcar (lambda (tool)
-                      (format nil "mcp__harness__~A" (gethash "name" tool)))
-                    (claude-mcp-tool-specifications)))))
+    (mapcar (lambda (tool)
+              (format nil "mcp__harness__~A" (gethash "name" tool)))
+            (claude-mcp-tool-specifications))))
 
 (defun claude-mcp-config ()
   "Return generated MCP config JSON once the Lisp bridge is loaded."
@@ -162,8 +161,8 @@ ambiguous for durable sessions."
               (list "--append-system-prompt" system-prompt))
             (when (and (stringp mcp-config) (plusp (length mcp-config)))
               (list "--mcp-config" mcp-config "--strict-mcp-config"))
-            (when (and (stringp allowed-tools) (plusp (length allowed-tools)))
-              (list "--allowedTools" allowed-tools))
+            (when (and (listp allowed-tools) allowed-tools)
+              (append (list "--allowedTools") allowed-tools))
             (when (and (stringp session-id) (plusp (length session-id)))
               (list "--resume" session-id))
             (when (and (stringp json-schema) (plusp (length json-schema)))
