@@ -27,10 +27,11 @@ also pass --model/--max-rounds. Errors (no snapshot) fall back to a fresh sessio
   synthetic             Synthetic OpenAI-compatible Chat Completions via SYNTHETIC_API_KEY
   codex       ChatGPT/Codex *subscription* via local codex app-server (no API key)
   claude      Claude Code CLI via CLAUDE_CODE_OAUTH_TOKEN setup-token (no API key)
-  claude-sdk  Direct Claude Agent SDK transport seam via CLAUDE_CODE_OAUTH_TOKEN
+  claude-sdk  Direct Anthropic Messages API transport via CLAUDE_CODE_OAUTH_TOKEN
               (no API key; never ANTHROPIC_API_KEY). Distinct from `claude`: it
-              does not spawn the Claude Code CLI. Direct transport is not yet
-              implemented -- every call fails with a clear not-implemented error.
+              does not spawn the Claude Code CLI. Text-only (no tools, no
+              session resume); streamed responses are buffered internally into
+              one final answer per call.
 
 HARNESS_BACKEND=openai is rejected. --backend openai errors at the CLI.
 

@@ -10,10 +10,9 @@ HARNESS_BACKEND selects the provider adapter:
     local codex app-server; no API key)
  - \"claude\" -> make-claude-backend (local Claude Code CLI using a runtime
     CLAUDE_CODE_OAUTH_TOKEN setup-token; no Anthropic HTTP API)
- - \"claude-sdk\" -> make-claude-sdk-backend (narrow direct Claude Agent SDK
-    transport seam, distinct from \"claude\"; also CLAUDE_CODE_OAUTH_TOKEN-only
-    and never ANTHROPIC_API_KEY, but its direct transport is not implemented
-    yet -- COMPLETE always signals a clear not-implemented error)
+ - \"claude-sdk\" -> make-claude-sdk-backend (direct Anthropic Messages API
+    transport, distinct from \"claude\"; also CLAUDE_CODE_OAUTH_TOKEN-only and
+    never ANTHROPIC_API_KEY; text-only, no tools, no session resume)
 
 OpenAI Platform billing is intentionally unsupported:
   - \"openai\" is a hard error

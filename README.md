@@ -278,12 +278,11 @@ HARNESS_LIVE_CLAUDE_SMOKE=1 bin/verify-claude-oauth
 It makes two real CLI calls, validates structured JSON and exact-session resume,
 and emits only sanitized evidence.
 
-## Claude Agent SDK direct backend seam (opt-in, issue #67)
+## Claude Agent SDK direct backend seam (opt-in, issue #68)
 
-`claude-sdk` is a distinct, narrower backend from `claude` above: it is a
-placeholder seam for a future **direct** Claude Agent SDK/Anthropic transport,
-not a Claude Code CLI adapter. Selecting it never spawns the `claude` binary
-and never opens a network connection.
+`claude-sdk` is a distinct, narrower backend from `claude` above: it speaks
+the Anthropic Messages HTTP API (`POST https://api.anthropic.com/v1/messages`)
+directly via Drakma, rather than spawning the `claude` binary.
 
 ```bash
 ./bin/chat --backend claude-sdk --model sonnet --prompt 'hello'
@@ -291,16 +290,20 @@ and never opens a network connection.
 
 Like `claude`, it requires a runtime-only `CLAUDE_CODE_OAUTH_TOKEN` (checked at
 completion time, not at CLI parse time) and never reads or falls back to
-`ANTHROPIC_API_KEY`. Unlike `claude`, no transport is implemented yet: once a
-token is present, every call deliberately fails with a clear
-not-implemented error rather than guessing an undocumented wire protocol.
-There is no tool support, streaming, session resume, CLOG wiring, or Anthropic
-Messages HTTP code behind this backend today.
+`ANTHROPIC_API_KEY`. The request is always sent with `stream: true` and the
+response is Server-Sent Events on success, but `complete` buffers and decodes
+that stream internally: callers always get exactly one normal completion
+response, never partial deltas. It is deliberately **text-only** for this
+change: no tool calls, no `--resume`-style session continuation, and no CLOG
+wiring. Provider/HTTP errors (rate limits, overloads, invalid requests, auth
+failures) are surfaced as a bounded, redacted `claude-sdk-backend-error` — the
+OAuth token and raw response bodies never reach a log line or an error
+message.
 
-A real implementation is blocked on a captured, sanitized request/response
-contract (issue #66); `claude-sdk` intentionally lands ahead of that capture so
-selection, identity, and credential boundaries can be proven now. See
-`docs/claude-sdk-backend.md` for the full scope and rationale.
+The real, credential-gated call against `api.anthropic.com` is proven by a
+separate opt-in live smoke (issue #70); every test in
+`tests/claude-sdk-backend.lisp` injects a fake HTTP transport and runs fully
+offline. See `docs/claude-sdk-backend.md` for the full scope and rationale.
 
 ## Chat CLI
 

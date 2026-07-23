@@ -191,12 +191,32 @@
    #:claude-verification-evidence
    #:format-claude-verification-evidence
    #:*claude-verify-prompt*
-   ;; Claude Agent SDK direct backend seam (issue #67): OAuth-only, no direct
-   ;; transport implemented yet, distinct from CLAUDE-BACKEND above.
+   ;; Claude Agent SDK direct backend seam (issue #68): OAuth-only direct
+   ;; Anthropic Messages API transport, distinct from CLAUDE-BACKEND above.
    #:claude-sdk-backend
    #:make-claude-sdk-backend
    #:claude-sdk-backend-error
    #:claude-sdk-backend-error-reason
+   #:claude-sdk-backend-transport
+   #:claude-sdk-backend-max-tokens
+   #:claude-sdk-backend-timeout
+   #:claude-sdk-request-headers
+   #:claude-sdk-system-prompt
+   #:claude-sdk-request-messages
+   #:claude-sdk-request-payload
+   #:claude-sdk-request-json
+   #:claude-sdk-parse-sse-events
+   #:claude-sdk-response-from-events
+   #:claude-sdk-response-from-body
+   #:claude-sdk-live-transport
+   #:*claude-sdk-messages-url*
+   #:*claude-sdk-anthropic-version*
+   #:*claude-sdk-anthropic-beta*
+   #:*claude-sdk-user-agent*
+   #:*claude-sdk-x-app*
+   #:*claude-sdk-default-max-tokens*
+   #:*claude-sdk-request-timeout-seconds*
+   #:*claude-sdk-connection-timeout-seconds*
    ;; Harness-owned Claude MCP bridge (schemas project from Lisp definitions)
    #:claude-mcp-tool-specifications
    #:claude-mcp-config-json
