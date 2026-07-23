@@ -108,6 +108,15 @@ any signalled condition."
         (cons "User-Agent" *claude-sdk-user-agent*)
         (cons "anthropic-version" *claude-sdk-anthropic-version*)
         (cons "x-app" *claude-sdk-x-app*)
+        ;; Captured TypeScript Agent SDK client metadata. Kept as explicit
+        ;; nonsecret compatibility headers; this direct POC is pinned to the
+        ;; tested SDK/runtime contract rather than inferring auth behavior.
+        (cons "x-stainless-lang" "js")
+        (cons "x-stainless-package-version" "0.94.0")
+        (cons "x-stainless-os" "Linux")
+        (cons "x-stainless-arch" "x64")
+        (cons "x-stainless-runtime" "node")
+        (cons "x-stainless-runtime-version" "v26.3.0")
         (cons "anthropic-beta" *claude-sdk-anthropic-beta*)))
 
 ;;; ---------------------------------------------------------------------
@@ -373,6 +382,26 @@ snippet."
     (claude-sdk-error "Anthropic Messages API request failed with HTTP status ~D~@[ (~A)~]: ~A"
                        status-code error-type safe)))
 
+(defun claude-sdk-debug-proxy ()
+  "Return an explicit Drakma proxy pair from CLAUDE_SDK_PROXY, or NIL.
+
+This opt-in diagnostic seam intentionally does not infer proxy settings from
+HTTP_PROXY/HTTPS_PROXY. Set CLAUDE_SDK_PROXY to `host:port` only for a local
+capture proxy; invalid values fail before a provider request."
+  (let ((raw (claude-sdk-normalize-token (uiop:getenv "CLAUDE_SDK_PROXY"))))
+    (when (and raw (plusp (length raw)))
+      (let ((colon (position #\: raw :from-end t)))
+        (unless (and colon (> colon 0) (< colon (1- (length raw))))
+          (claude-sdk-error "CLAUDE_SDK_PROXY must be host:port."))
+        (let ((host (subseq raw 0 colon))
+              (port-text (subseq raw (1+ colon))))
+          (handler-case
+              (let ((port (parse-integer port-text)))
+                (unless (and (plusp port) (<= port 65535))
+                  (claude-sdk-error "CLAUDE_SDK_PROXY port must be in 1..65535."))
+                (list host port))
+            (error () (claude-sdk-error "CLAUDE_SDK_PROXY must be host:port."))))))))
+
 (defun claude-sdk-live-transport (url headers content-octets)
   "POST CONTENT-OCTETS to URL with HEADERS via Drakma.
 
@@ -386,13 +415,24 @@ fully buffered and safely UTF-8 decoded via OPENROUTER-RESPONSE-BODY-STRING
 afterward, entirely in Lisp, in CLAUDE-SDK-PARSE-SSE-EVENTS."
   (let* ((content-type (or (cdr (assoc "Content-Type" headers :test #'string-equal))
                             "application/json"))
-         (other-headers (remove "Content-Type" headers :key #'car :test #'string-equal)))
+         (user-agent (cdr (assoc "User-Agent" headers :test #'string-equal)))
+         (accept (cdr (assoc "Accept" headers :test #'string-equal)))
+         ;; Drakma prepends its default User-Agent if a caller supplies that
+         ;; field through :additional-headers. Use its dedicated keywords so
+         ;; the observed SDK values are emitted exactly once.
+         (other-headers (remove-if (lambda (header)
+                                     (member (car header) '("Content-Type" "User-Agent" "Accept")
+                                             :test #'string-equal))
+                                   headers)))
     (multiple-value-bind (body status-code response-headers)
         (drakma:http-request url
-                              :method :post
+                              :method *claude-sdk-http-method*
                               :content content-octets
                               :content-type content-type
+                              :user-agent user-agent
+                              :accept accept
                               :additional-headers other-headers
+                              :proxy (claude-sdk-debug-proxy)
                               :connection-timeout *claude-sdk-connection-timeout-seconds*)
       (declare (ignore response-headers))
       (values (openrouter-response-body-string body) status-code))))

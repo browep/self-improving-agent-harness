@@ -1,0 +1,38 @@
+{
+  "schema": "self-improving-agent-harness/claude-sdk-contract/v1",
+  "provenance": {
+    "official_client": "claude-code",
+    "official_client_version": "2.1.218",
+    "client_language": "typescript",
+    "capture_date_utc": "2026-07-23",
+    "capture_procedure": "docs/claude-sdk-capture.md",
+    "network_scope": "ephemeral Docker-only local MITM proxy",
+    "retention": "allowlisted protocol metadata and JSON shapes only; no bodies or credentials"
+  },
+  "request": {
+    "method": "POST",
+    "host": "api.anthropic.com",
+    "path": "/v1/messages",
+    "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "user-agent": "claude-cli/2.1.218 (external, sdk-ts, agent-sdk/0.3.218)",
+      "anthropic-version": "2023-06-01",
+      "x-app": "cli",
+      "x-stainless-lang": "js",
+      "x-stainless-package-version": "0.94.0",
+      "x-stainless-os": "Linux",
+      "x-stainless-arch": "x64",
+      "x-stainless-runtime": "node",
+      "x-stainless-runtime-version": "v26.3.0",
+      "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,structured-outputs-2025-12-15,cache-diagnosis-2026-04-07"
+    },
+    "payload_shape": {
+      "type": "object",
+      "fields": {
+        "model": "string", "max_tokens": "number", "messages": "array<object(role:string,content:array<object(type:string,text:string)>)>", "system": "array<object(type:string,text:string)>", "stream": "boolean", "metadata": "object", "output_config": "object", "temperature": "number", "thinking": "object", "tools": "array"
+      }
+    }
+  },
+  "response": {"status": 200, "content-type": "text/event-stream; charset=utf-8"}
+}

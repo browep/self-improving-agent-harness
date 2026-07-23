@@ -12,6 +12,9 @@
 .env
 .env.*
 !.env.example
+
+# Ephemeral, manifest-only Claude SDK protocol capture workspace.
+.capture/
 secrets/
 
 # Generated offline run-report artifacts

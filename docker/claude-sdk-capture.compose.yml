@@ -1,0 +1,28 @@
+services:
+  proxy:
+    image: mitmproxy/mitmproxy:11.1.2
+    command: ["mitmdump", "--set", "block_global=false", "--set", "confdir=/capture", "-s", "/scripts/claude-sdk-capture-addon.py"]
+    environment:
+      CLAUDE_CODE_CAPTURE_VERSION: "2.1.218"
+      CLAUDE_SDK_CAPTURE_MANIFEST: /capture/claude-sdk-subscription-contract.v1.json
+    volumes:
+      - ../scripts:/scripts:ro
+      - ../.capture/claude-sdk-contract:/capture
+    networks: [capture]
+  client:
+    image: self-improving-agent-harness:dev
+    entrypoint: ["/bin/sh", "-lc"]
+    command: ["sleep infinity"]
+    env_file:
+      - ../.env
+    environment:
+      HTTPS_PROXY: http://proxy:8080
+      HTTP_PROXY: http://proxy:8080
+      NO_PROXY: localhost,127.0.0.1
+      NODE_EXTRA_CA_CERTS: /capture/mitmproxy-ca-cert.pem
+    volumes:
+      - ../.capture/claude-sdk-contract:/capture:ro
+    networks: [capture]
+networks:
+  capture:
+    internal: false
