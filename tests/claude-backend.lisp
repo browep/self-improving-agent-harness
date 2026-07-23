@@ -81,6 +81,10 @@
                       "subsequent Claude turn resumes the exact returned session")
          (ensure-true (member "--output-format" seen-argv :test #'string=)
                       "Claude invocation requests structured JSON")
+         (ensure-true (member "--tools" seen-argv :test #'string=)
+                      "Claude invocation disables native tools")
+         (ensure-true (not (member "--bare" seen-argv :test #'string=))
+                      "OAuth setup-token invocation never uses incompatible bare mode")
          (ensure-true (not (member seen-token seen-argv :test #'string=))
                       "OAuth token is absent from Claude argv")
          (ensure-equal "test-oauth-token" seen-token

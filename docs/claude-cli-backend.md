@@ -37,10 +37,13 @@ rather than directory-scoped `--continue`.
 ## Tool-loop decision
 
 The Claude Code CLI owns its normal agent tools. The harness must not infer
-native tool calls from assistant text/XML. The current adapter invokes `--bare`,
-which disables ambient hooks, skills, plugins, and MCP configuration and keeps
-the backend **tool-free**. It returns no fabricated `tool_calls` to the harness
-loop.
+native tool calls from assistant text/XML. The current adapter invokes
+`--tools ""`, which disables Claude-native tools and keeps the backend
+**tool-free**. It returns no fabricated `tool_calls` to the harness loop.
+
+It deliberately does **not** use `--bare`: current Claude Code documentation
+says bare mode bypasses OAuth/keychain reads and requires API-key/helper auth,
+which conflicts with this setup-token OAuth-only backend.
 
 Official CLI documentation describes `--output-format stream-json` as
 newline-delimited streaming events, but this implementation does not treat that

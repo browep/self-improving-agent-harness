@@ -261,9 +261,10 @@ CLAUDE_CODE_OAUTH_TOKEN=...  # never commit this value
 Claude JSON output provides completion text, metadata, and a `session_id`. The
 backend retains that ID and uses `--resume <session_id>` for later turns in the
 same running harness session; it intentionally does not rely on directory-scoped
-`--continue`. Claude-native tools are disabled with `--bare` for now: the
+`--continue`. Claude-native tools are disabled with `--tools ""` for now: the
 harness exposes no synthetic text/XML tool-call bridge and remains tool-free
-until structured `stream-json` event mediation is proven safe.
+until structured `stream-json` event mediation is proven safe. `--bare` is not
+used because it bypasses Claude OAuth/keychain credential reads.
 
 Run the explicit, billable live proof (excluded from `make test`) after setting
 the token:

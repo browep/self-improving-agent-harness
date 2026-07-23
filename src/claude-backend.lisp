@@ -103,11 +103,17 @@ silently loses context."
 (defun claude-cli-argv (request &key session-id json-schema)
   "Build safe argv for one Claude Code non-interactive invocation.
 
-The OAuth token is deliberately absent from argv.  `--bare` avoids accidental
-project/user hooks and MCP configuration, making harness turns reproducible and
-preventing Claude-native tools from bypassing the harness tool loop."
+The OAuth token is deliberately absent from argv. An empty `--tools` list
+disables the Claude-native tool set so this adapter cannot bypass the harness
+tool loop.
+
+Do not use `--bare`: Claude Code documents bare mode as bypassing OAuth/keychain
+credential reads in favor of API-key helpers, which is incompatible with this
+setup-token OAuth-only backend. A Claude CLI session id, if known, is resumed
+explicitly rather than using `--continue`, which is directory-scoped and
+ambiguous for durable sessions."
   (append *claude-command*
-          (list "--bare" "-p" (claude-request-prompt request)
+          (list "--tools" "" "-p" (claude-request-prompt request)
                 "--output-format" "json"
                 "--model" (or (completion-request-model request) *claude-default-model*))
           (when (and (stringp session-id) (plusp (length session-id)))
@@ -206,9 +212,10 @@ usage absent when values are unavailable rather than fabricating accounting."
 (defmethod complete ((backend claude-backend) request)
   "Run one safe, tool-free Claude Code CLI turn and retain its returned session id.
 
-Claude-native tools are deliberately disabled via `--bare`; this adapter emits
-no fabricated harness tool calls. A future implementation may enable structured
-stream-json mediation only after its event contract is proven sufficient."
+Claude-native tools are deliberately disabled via an empty `--tools` list; this
+adapter emits no fabricated harness tool calls. A future implementation may
+enable structured stream-json mediation only after its event contract is proven
+sufficient."
   (let* ((token (require-claude-oauth-token))
          (argv (claude-cli-argv request :session-id (claude-backend-session-id backend)))
          (runner (claude-backend-runner backend)))
