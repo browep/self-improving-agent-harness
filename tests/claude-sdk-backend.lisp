@@ -149,9 +149,31 @@ can assert on exactly what COMPLETE tried to send."
                   (mapcar (lambda (m) (cons (getf m :role) (getf m :content)))
                           (getf payload :messages))
                   "payload messages exclude the system turn and preserve order/content")
-    (ensure-true (not (member :tools payload)) "payload never declares tools")
+    (ensure-true (not (member :tools payload)) "payload omits tools when the request does not define them")
     (ensure-true (not (member :tool-choice payload)) "payload never forces tool_choice")
     (ensure-true (not (member :resume payload)) "payload carries no resume-style field"))
+
+  ;; ---- Native Anthropic tool declarations are derived directly from the
+  ;; harness's OpenAI-compatible function definitions. No CLI/MCP fallback or
+  ;; credential boundary is involved. ----
+  (let* ((tool (list :type "function"
+                     :function (list :name "echo"
+                                     :description "Return the supplied message."
+                                     :parameters (list :type "object"
+                                                       :properties (list :message
+                                                                         (list :type "string"))
+                                                       :required (list "message")))))
+         (payload (claude-sdk-request-payload
+                   (claude-sdk-test-request :options (list :tools (list tool)))
+                   (make-claude-sdk-backend)))
+         (serialized (first (getf payload :tools))))
+    (ensure-equal "echo" (getf serialized :name)
+                  "payload maps a function tool name to Anthropic tools[].name")
+    (ensure-equal "Return the supplied message." (getf serialized :description)
+                  "payload maps a function tool description to Anthropic tools[].description")
+    (ensure-equal '(:type "object" :properties (:message (:type "string")) :required ("message"))
+                  (getf serialized :input-schema)
+                  "payload maps function parameters to Anthropic input_schema"))
 
   ;; system is entirely absent (not merely blank) when the request has none.
   (let* ((payload (claude-sdk-request-payload (claude-sdk-test-request :content "no system here")
@@ -226,6 +248,35 @@ line two"
                  (format nil "event: greeting~%data: {\"a\":1}~%~%"))))
     (ensure-true (hash-table-p (getf (first frames) :data))
                  "data: lines that are valid JSON are pre-parsed for callers"))
+
+  ;; ---- Streamed native tool_use blocks become harness tool calls. Both an
+  ;; input object supplied at block start and streamed input_json_delta text are
+  ;; supported; the latter is the Messages streaming form used for tool inputs. ----
+  (let* ((body (format nil "~{~A~%~}"
+                       (list "event: message_start"
+                             "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_tool\",\"model\":\"claude-sonnet-5\",\"usage\":{\"input_tokens\":7}}}"
+                             ""
+                             "event: content_block_start"
+                             "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_fixture_1\",\"name\":\"echo\",\"input\":{}}}"
+                             ""
+                             "event: content_block_delta"
+                             "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"message\\\":\\\"hello\\\"}\"}}"
+                             ""
+                             "event: message_delta"
+                             "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":4}}"
+                             "")))
+         (response (claude-sdk-response-from-body body (claude-sdk-test-request)))
+         (call (first (completion-response-tool-calls response))))
+    (ensure-equal "tool_use" (completion-response-finish-reason response)
+                  "tool stream preserves Anthropic's tool_use stop reason")
+    (ensure-equal "toolu_fixture_1" (getf call :id)
+                  "tool_use stream preserves the provider tool ID")
+    (ensure-equal "function" (getf call :type)
+                  "tool_use stream normalizes to the harness function call type")
+    (ensure-equal "echo" (getf call :name)
+                  "tool_use stream preserves the native tool name")
+    (ensure-equal "hello" (gethash "message" (yason:parse (getf call :arguments)))
+                  "input_json_delta fragments assemble into the tool arguments JSON"))
 
   ;; ---- Response normalization from a realistic captured trace. ----
   (let* ((body (claude-sdk-fixture-string "tests/fixtures/claude-sdk-messages-basic.sse"))
@@ -360,6 +411,61 @@ data: {\"type\":\"message_stop\"}
            (ensure-true (search "hi there"
                                 (gethash "content" (first (coerce (gethash "messages" sent) 'list))))
                         "COMPLETE forwards the user turn text in the wire payload"))))))
+
+  ;; ---- Full offline tool-loop round trip: the first streamed tool_use is
+  ;; executed by the existing harness loop and its result is sent back as an
+  ;; Anthropic tool_result continuation, never through a CLI fallback. ----
+  (with-claude-sdk-test-env
+   "sdk-fixture-token"
+   (lambda ()
+     (let ((payloads '()) (calls 0))
+       (let* ((tool-stream (format nil "event: message_start~%data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_loop_1\",\"model\":\"m\",\"usage\":{\"input_tokens\":1}}}~%~%event: content_block_start~%data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_loop_1\",\"name\":\"echo\",\"input\":{\"message\":\"from-provider\"}}}~%~%event: message_delta~%data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}~%~%"))
+              (final-stream (format nil "event: message_start~%data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_loop_2\",\"model\":\"m\",\"usage\":{\"input_tokens\":2}}}~%~%event: content_block_delta~%data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"tool loop done\"}}~%~%event: message_delta~%data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}~%~%"))
+              (backend (make-claude-sdk-backend
+                        :transport (lambda (url headers octets)
+                                     (declare (ignore url headers))
+                                     (push (yason:parse (sb-ext:octets-to-string octets :external-format :utf-8)) payloads)
+                                     (incf calls)
+                                     (values (if (= calls 1) tool-stream final-stream) 200))))
+              (tool (list :type "function"
+                          :function (list :name "echo" :description "echo"
+                                          :parameters (list :type "object" :properties '()))))
+              (response (run-tool-loop
+                         backend
+                         (claude-sdk-test-request :content "use echo" :options (list :tools (list tool)))
+                         `(("echo" . ,(lambda (arguments)
+                                         (format nil "echoed: ~A" (gethash "message" arguments))))))))
+         (ensure-equal "tool loop done" (completion-response-text response)
+                       "native Claude tool use reaches the final harness response")
+         (ensure-equal 2 calls "tool loop makes a Messages continuation request")
+         (let* ((first-payload (second payloads))
+                (continuation (first payloads))
+                (tool-schema (first (self-improving-agent-harness::openrouter-list (gethash "tools" first-payload))))
+                (messages (self-improving-agent-harness::openrouter-list (gethash "messages" continuation)))
+                (assistant (second messages))
+                (tool-result-message (third messages))
+                (tool-use (first (self-improving-agent-harness::openrouter-list (gethash "content" assistant))))
+                (tool-result (first (self-improving-agent-harness::openrouter-list (gethash "content" tool-result-message)))))
+           (ensure-equal "echo" (gethash "name" tool-schema)
+                         "initial Messages request declares the harness tool")
+           (ensure-equal "assistant" (gethash "role" assistant)
+                         "continuation retains the assistant tool_use turn")
+           (ensure-equal "tool_use" (gethash "type" tool-use)
+                         "continuation serializes a native Anthropic tool_use block")
+           (ensure-equal "toolu_loop_1" (gethash "id" tool-use)
+                         "continuation retains the provider tool_use id")
+           (ensure-equal "from-provider"
+                         (self-improving-agent-harness::openrouter-json-field
+                          (gethash "input" tool-use) "message")
+                         "continuation retains the decoded tool input")
+           (ensure-equal "user" (gethash "role" tool-result-message)
+                         "tool output is continued in an Anthropic user turn")
+           (ensure-equal "tool_result" (gethash "type" tool-result)
+                         "continuation serializes an Anthropic tool_result block")
+           (ensure-equal "toolu_loop_1" (gethash "tool_use_id" tool-result)
+                         "tool_result references the matching native tool id")
+           (ensure-equal "echoed: from-provider" (gethash "content" tool-result)
+                         "tool_result carries the harness handler output"))))))
 
   ;; ---- Full COMPLETE round trip: provider HTTP errors are surfaced safely,
   ;; with the OAuth token and raw body redacted. ----

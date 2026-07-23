@@ -12,7 +12,8 @@ HARNESS_BACKEND selects the provider adapter:
     CLAUDE_CODE_OAUTH_TOKEN setup-token; no Anthropic HTTP API)
  - \"claude-sdk\" -> make-claude-sdk-backend (direct Anthropic Messages API
     transport, distinct from \"claude\"; also CLAUDE_CODE_OAUTH_TOKEN-only and
-    never ANTHROPIC_API_KEY; text-only, no tools, no session resume)
+    never ANTHROPIC_API_KEY; native Messages tools via the shared harness loop,
+    no session resume)
 
 OpenAI Platform billing is intentionally unsupported:
   - \"openai\" is a hard error

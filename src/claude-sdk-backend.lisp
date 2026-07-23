@@ -10,11 +10,13 @@
 ;;;; credential boundary is the same runtime-only CLAUDE_CODE_OAUTH_TOKEN used
 ;;;; by the CLI backend; it never reads or falls back to ANTHROPIC_API_KEY.
 ;;;;
-;;;; Scope (issue #68): text-only completion requests (model, messages,
-;;;; optional system, stream:true). No tools, no --resume-style session
-;;;; continuation, no CLOG wiring. The wire contract below -- headers, the
-;;;; streamed Server-Sent Events shape, and the JSON error envelope -- was
-;;;; captured from an authorized local proxy sitting in front of a known-good
+;;;; Scope (issue #71): native Anthropic Messages tools. Harness function
+;;;; definitions serialize directly to `tools`; streamed `tool_use` blocks
+;;;; normalize into the shared tool loop; and its generic continuation messages
+;;;; serialize back as Anthropic `tool_use`/`tool_result` content blocks. No CLI
+;;;; fallback, resume-style state, or CLOG wiring is involved. The wire contract
+;;;; below -- headers, the streamed Server-Sent Events shape, and the JSON error
+;;;; envelope -- was captured from an authorized local proxy sitting in front of a known-good
 ;;;; official client turn. The request is always sent with stream:true and the
 ;;;; response is always Server-Sent Events on success, but COMPLETE buffers
 ;;;; and normalizes that stream internally: callers of COMPLETE always get
@@ -120,36 +122,92 @@ any signalled condition."
         (cons "anthropic-beta" *claude-sdk-anthropic-beta*)))
 
 ;;; ---------------------------------------------------------------------
-;;; Request payload (text-only: model, messages, optional system, stream)
+;;; Request payload (model, messages, optional system/tools, stream)
 ;;; ---------------------------------------------------------------------
 
 (defun claude-sdk-system-prompt (request)
   "Return REQUEST's system-role text, or NIL when absent/blank.
 
-Only the first system-role message is used, matching CLAUDE-SYSTEM-PROMPT's
-convention in the sibling CLI backend (src/claude-backend.lisp). Unlike that
-backend, no tool-execution instructions are appended here: this transport
-never advertises tools (issue #68 scope)."
+System-role turns are extracted separately for the top-level `system` field.
+Native tools are serialized by CLAUDE-SDK-REQUEST-MESSAGES, not appended to
+the system prompt."
   (loop for message in (completion-request-messages request)
         when (and (string= "system" (or (getf message :role) ""))
                   (stringp (getf message :content))
                   (plusp (length (getf message :content))))
           do (return (getf message :content))))
 
-(defun claude-sdk-request-messages (request)
-  "Return REQUEST's user/assistant turns as Anthropic Messages API message objects.
+(defun claude-sdk-json-object-string (value)
+  "Encode VALUE as the JSON object string expected by the harness tool loop."
+  (with-output-to-string (stream)
+    (yason:encode value stream)))
 
-System-role turns are excluded here; CLAUDE-SDK-SYSTEM-PROMPT extracts them
-separately for the top-level `system` field. Only string content is
-forwarded -- this backend is deliberately text-only for issue #68, so any
-non-string turn (e.g. a stray tool-shaped message) degrades to empty text
-rather than guessing a serialization."
-  (loop for message in (completion-request-messages request)
-        for role = (or (getf message :role) "")
-        when (or (string= role "user") (string= role "assistant"))
-          collect (list :role role
-                        :content (let ((content (getf message :content)))
-                                   (if (stringp content) content "")))))
+(defun claude-sdk-tool-use-block (tool-call)
+  "Translate one harness tool-call message entry into an Anthropic tool_use block."
+  (let* ((function (getf tool-call :function))
+         (name (or (getf tool-call :name) (getf function :name)))
+         (arguments (or (getf tool-call :arguments) (getf function :arguments))))
+    (list :type "tool_use"
+          :id (getf tool-call :id)
+          :name name
+          :input (handler-case
+                     (yason:parse (or arguments "{}"))
+                   (error ()
+                     (claude-sdk-error "Tool ~S supplied invalid JSON arguments." name))))))
+
+(defun claude-sdk-message-content (message role)
+  "Translate one harness message's content into an Anthropic content value."
+  (let ((text (getf message :content)))
+    (cond
+      ((string= role "tool")
+       (list (list :type "tool_result"
+                   :tool-use-id (getf message :tool-call-id)
+                   :content (if (stringp text) text ""))))
+      ((and (string= role "assistant") (getf message :tool-calls))
+       (append (when (and (stringp text) (plusp (length text)))
+                 (list (list :type "text" :text text)))
+               (mapcar #'claude-sdk-tool-use-block (getf message :tool-calls))))
+      (t (if (stringp text) text "")))))
+
+(defun claude-sdk-request-messages (request)
+  "Return REQUEST turns as Anthropic Messages API message objects.
+
+System turns are lifted into the top-level `system` field. Harness assistant
+function calls become native `tool_use` content blocks and harness `tool`
+results become `tool_result` blocks in user messages. Consecutive tool results
+are coalesced so the Anthropic role-alternation contract is preserved."
+  (let ((result '()))
+    (dolist (message (completion-request-messages request))
+      (let ((role (or (getf message :role) "")))
+        (cond
+          ((string= role "system") nil)
+          ((string= role "tool")
+           (let ((block (claude-sdk-message-content message role))
+                 (previous (first result)))
+             (if (and previous (string= (getf previous :role) "user")
+                      (listp (getf previous :content)))
+                 (setf (getf previous :content)
+                       (append (getf previous :content) block))
+                 (push (list :role "user" :content block) result))))
+          ((or (string= role "user") (string= role "assistant"))
+           (push (list :role role :content (claude-sdk-message-content message role))
+                 result)))))
+    (nreverse result)))
+
+(defun claude-sdk-tool-definition (tool)
+  "Translate one OpenAI-compatible function TOOL into Anthropic's tools shape."
+  (let ((function (getf tool :function)))
+    (when (and function (string= (or (getf tool :type) "function") "function"))
+      (append (list :name (getf function :name)
+                    :input-schema (or (getf function :parameters)
+                                      (list :type "object" :properties '())))
+              (when (getf function :description)
+                (list :description (getf function :description)))))))
+
+(defun claude-sdk-request-tools (request)
+  "Project harness function definitions to Anthropic Messages `tools` objects."
+  (remove nil (mapcar #'claude-sdk-tool-definition
+                      (or (getf (completion-request-options request) :tools) '()))))
 
 (defun claude-sdk-request-max-tokens (request backend)
   "Resolve `max_tokens`: per-request OPTIONS win, then a backend-level
@@ -162,16 +220,18 @@ override, then the conservative global default."
 (defun claude-sdk-request-payload (request backend)
   "Return REQUEST as an Anthropic Messages API payload plist, before JSON encoding.
 
-Text-only: MODEL, MAX-TOKENS, MESSAGES, STREAM t, and SYSTEM only when
-present. Deliberately no `tools`, no `tool_choice`, and no resume-style field
-(issue #68 scope; native tool support is a follow-up)."
-  (let ((system (claude-sdk-system-prompt request)))
+MODEL, MAX-TOKENS, MESSAGES, STREAM, optional SYSTEM, and native TOOLS.
+Deliberately no `tool_choice` or resume-style field: tool execution uses the
+harness loop's ordinary next request."
+  (let ((system (claude-sdk-system-prompt request))
+        (tools (claude-sdk-request-tools request)))
     (append
      (list :model (completion-request-model request)
            :max-tokens (claude-sdk-request-max-tokens request backend)
            :messages (claude-sdk-request-messages request)
            :stream t)
-     (when system (list :system system)))))
+     (when system (list :system system))
+     (when tools (list :tools tools)))))
 
 (defun claude-sdk-request-json (payload)
   "Serialize PAYLOAD (a keyword plist) to the Anthropic Messages API JSON contract.
@@ -266,6 +326,20 @@ error type/message -- no raw body, no headers."
                            (and (stringp event-name) (format nil "unparseable ~A frame" event-name))
                            "no message provided"))))
 
+(defun claude-sdk-tool-calls-from-blocks (table)
+  "Return normalized harness calls from streamed Anthropic tool_use block state."
+  (loop for index in (sort (loop for key being the hash-keys of table collect key) #'<)
+        for block = (gethash index table)
+        for partial = (getf block :partial-json)
+        collect (list :id (getf block :id)
+                      :type "function"
+                      :name (getf block :name)
+                      :arguments (if (and (stringp partial) (plusp (length partial)))
+                                     partial
+                                     (claude-sdk-json-object-string
+                                      (or (getf block :input)
+                                          (make-hash-table)))))))
+
 (defun claude-sdk-response-from-events (events request)
   "Normalize a full ordered list of parsed Anthropic Messages SSE frames.
 
@@ -280,7 +354,9 @@ message_delta. `ping`, `content_block_start`/`content_block_stop`,
 forward-compatibly."
   (let ((model nil) (message-id nil) (stop-reason nil)
         (input-tokens nil) (output-tokens nil)
-        (text-blocks (make-hash-table)) (saw-message-start nil))
+        (text-blocks (make-hash-table))
+        (tool-use-blocks (make-hash-table))
+        (saw-message-start nil))
     (dolist (event events)
       (let* ((data (getf event :data))
              (event-name (getf event :event))
@@ -298,16 +374,34 @@ forward-compatibly."
              (setf message-id (and message (openrouter-json-field message "id")))
              (let ((input (and usage (openrouter-json-field usage "input_tokens"))))
                (when (realp input) (setf input-tokens input)))))
+          ((string= (or type "") "content_block_start")
+           (let* ((index (openrouter-json-field data "index"))
+                  (block (openrouter-json-field data "content_block")))
+             (when (and (integerp index) block
+                        (string= (or (openrouter-json-field block "type") "") "tool_use"))
+               (setf (gethash index tool-use-blocks)
+                     (list :id (openrouter-json-field block "id")
+                           :name (openrouter-json-field block "name")
+                           :input (openrouter-json-field block "input")
+                           :partial-json "")))))
           ((string= (or type "") "content_block_delta")
            (let* ((index (openrouter-json-field data "index"))
-                  (delta (openrouter-json-field data "delta")))
-             (when (and (integerp index)
-                        delta
-                        (string= (or (openrouter-json-field delta "type") "") "text_delta"))
-               (let ((text (openrouter-json-field delta "text")))
-                 (when (stringp text)
-                   (setf (gethash index text-blocks)
-                         (concatenate 'string (or (gethash index text-blocks) "") text)))))))
+                  (delta (openrouter-json-field data "delta"))
+                  (delta-type (and delta (openrouter-json-field delta "type"))))
+             (cond
+               ((and (integerp index) delta (string= (or delta-type "") "text_delta"))
+                (let ((text (openrouter-json-field delta "text")))
+                  (when (stringp text)
+                    (setf (gethash index text-blocks)
+                          (concatenate 'string (or (gethash index text-blocks) "") text)))))
+               ((and (integerp index) delta (string= (or delta-type "") "input_json_delta")
+                     (gethash index tool-use-blocks))
+                (let ((partial (openrouter-json-field delta "partial_json")))
+                  (when (stringp partial)
+                    (setf (getf (gethash index tool-use-blocks) :partial-json)
+                          (concatenate 'string
+                                       (getf (gethash index tool-use-blocks) :partial-json)
+                                       partial))))))))
           ((string= (or type "") "message_delta")
            (let* ((delta (openrouter-json-field data "delta"))
                   (usage (openrouter-json-field data "usage")))
@@ -324,7 +418,7 @@ forward-compatibly."
      :text (claude-sdk-join-text-blocks text-blocks)
      :model (or model (completion-request-model request))
      :raw events
-     :tool-calls '()
+     :tool-calls (claude-sdk-tool-calls-from-blocks tool-use-blocks)
      :finish-reason stop-reason
      :provider-request-id message-id
      :usage (append (when input-tokens (list :prompt-tokens input-tokens))
@@ -466,10 +560,10 @@ I/O) and is overridden by every offline test."))
 Streams the response internally as Server-Sent Events but never exposes
 partial deltas to the caller: the entire body is buffered, safely UTF-8
 decoded, and normalized into exactly one COMPLETION-RESPONSE, matching the
-harness-facing COMPLETE contract used by every other backend. Text-only: no
-tools, no `--resume`-style session continuation, and no CLOG/UI involvement
-(issue #68 scope; native tool support and the credential-gated live smoke
-against api.anthropic.com are follow-up issues).
+harness-facing COMPLETE contract used by every other backend. Native `tool_use`
+blocks normalize to pending harness calls; later harness requests serialize their
+assistant calls and results as native `tool_use`/`tool_result` content. There is
+no CLI fallback, resume-style state, or CLOG/UI involvement.
 
 Never logs the OAuth token, request headers, or a raw response/error body --
 only bounded, redacted diagnostics reach LOG-INTERACTION or any signalled
