@@ -17,6 +17,11 @@
 .capture/
 secrets/
 
+# Sensitive local-only raw request-body sidecars from the proxy comparator.
+# They contain prompts, Claude Code's full system prompt, tool descriptions,
+# and device/session metadata. Never commit; disposable diagnostic material.
+raw-request-body-*.json
+
 # Generated offline run-report artifacts
 reports/
 

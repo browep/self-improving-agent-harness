@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Offline regression tests for the sanitized Claude SDK proxy manifest."""
+import hashlib
 import importlib.util
+import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -71,6 +74,55 @@ class ProxyCompareAddonTests(unittest.TestCase):
             "anthropic-beta": "effort-2025-11-24",
         }, headers)
         self.assertEqual(["authorization", "cookie", "x-api-key"], redacted)
+
+    def test_raw_capture_disabled_by_default(self):
+        saved = os.environ.pop("COMPARE_CAPTURE_RAW_BODY", None)
+        try:
+            self.assertFalse(ADDON.raw_capture_enabled())
+            for value in ("1", "true", "yes", "on"):
+                os.environ["COMPARE_CAPTURE_RAW_BODY"] = value
+                self.assertTrue(ADDON.raw_capture_enabled())
+            os.environ["COMPARE_CAPTURE_RAW_BODY"] = "0"
+            self.assertFalse(ADDON.raw_capture_enabled())
+        finally:
+            os.environ.pop("COMPARE_CAPTURE_RAW_BODY", None)
+            if saved is not None:
+                os.environ["COMPARE_CAPTURE_RAW_BODY"] = saved
+
+    def test_write_request_body_sidecar_preserves_exact_bytes(self):
+        # The whole point of the sidecar is byte fidelity: NO reordering,
+        # reformatting, or field redaction that would hide null-vs-false,
+        # key order, or cache_control differences.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "manifest.json"
+            saved = ADDON.OUT
+            ADDON.OUT = out
+            try:
+                body = b'{"b":2,"a":1,"diagnostics":{"previous_message_id":null}}'
+                filename, byte_length, digest = ADDON.write_request_body_sidecar("wire", "lisp", body, 0)
+                written = (out.parent / filename).read_bytes()
+                self.assertEqual(body, written)
+                self.assertEqual(len(body), byte_length)
+                self.assertEqual(hashlib.sha256(body).hexdigest(), digest)
+                self.assertEqual("raw-request-body-wire-lisp-0000.json", filename)
+            finally:
+                ADDON.OUT = saved
+
+    def test_write_request_body_sidecar_handles_none_and_str(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "manifest.json"
+            saved = ADDON.OUT
+            ADDON.OUT = out
+            try:
+                filename, byte_length, _ = ADDON.write_request_body_sidecar("wire", "ts", None, 3)
+                self.assertEqual(0, byte_length)
+                self.assertEqual(b"", (out.parent / filename).read_bytes())
+                self.assertEqual("raw-request-body-wire-ts-0003.json", filename)
+                filename, byte_length, _ = ADDON.write_request_body_sidecar("decoded", "ts", '{"a":1}', 4)
+                self.assertEqual(b'{"a":1}', (out.parent / filename).read_bytes())
+                self.assertEqual("raw-request-body-decoded-ts-0004.json", filename)
+            finally:
+                ADDON.OUT = saved
 
 
 if __name__ == "__main__":
