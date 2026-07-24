@@ -175,43 +175,75 @@ the system prompt."
                    (error ()
                      (claude-sdk-error "Tool ~S supplied invalid JSON arguments." name))))))
 
+(defun claude-sdk-nonempty-string-p (value)
+  "True when VALUE is a string with at least one non-blank character."
+  (and (stringp value)
+       (plusp (length (string-trim '(#\Space #\Tab #\Newline #\Return) value)))))
+
+(defun claude-sdk-tool-result-content (value)
+  "Anthropic rejects empty tool_result content. Tools legitimately return no
+output (a shell command with no stdout, a screenshot save, a browser eval
+returning nothing); persist those as a small non-empty placeholder so the
+tool_use/tool_result pairing survives a continuation request."
+  (if (claude-sdk-nonempty-string-p value)
+      value
+      "(tool returned no output)"))
+
 (defun claude-sdk-message-content (message role)
-  "Translate one harness message's content into an Anthropic content value."
+  "Translate one harness message's content into an Anthropic content value.
+
+Returns NIL when a plain user/assistant turn has no usable text; the caller
+drops such turns so no empty {\"type\":\"text\",\"text\":\"\"} block reaches the
+wire (Anthropic rejects empty text blocks). Tool results always yield a block
+with non-empty content to preserve the tool_use/tool_result pairing."
   (let ((text (getf message :content)))
     (cond
       ((string= role "tool")
        (list (list :type "tool_result"
                    :tool-use-id (getf message :tool-call-id)
-                   :content (if (stringp text) text ""))))
+                   :content (claude-sdk-tool-result-content text))))
       ((and (string= role "assistant") (getf message :tool-calls))
-       (append (when (and (stringp text) (plusp (length text)))
+       (append (when (claude-sdk-nonempty-string-p text)
                  (list (list :type "text" :text text)))
                (mapcar #'claude-sdk-tool-use-block (getf message :tool-calls))))
-      (t (list (list :type "text" :text (if (stringp text) text "")))))))
+      ((claude-sdk-nonempty-string-p text)
+       (list (list :type "text" :text text)))
+      (t nil))))
 
 (defun claude-sdk-request-messages (request)
   "Return REQUEST turns as Anthropic Messages API message objects.
 
 System turns are lifted into the top-level `system` field. Harness assistant
 function calls become native `tool_use` content blocks and harness `tool`
-results become `tool_result` blocks in user messages. Consecutive tool results
-are coalesced so the Anthropic role-alternation contract is preserved."
+results become `tool_result` blocks in user messages. Consecutive same-role
+messages are coalesced so the Anthropic role-alternation contract is preserved
+even when blank plain turns (which serialize to no content blocks) are dropped."
   (let ((result '()))
-    (dolist (message (completion-request-messages request))
-      (let ((role (or (getf message :role) "")))
-        (cond
-          ((string= role "system") nil)
-          ((string= role "tool")
-           (let ((block (claude-sdk-message-content message role))
-                 (previous (first result)))
-             (if (and previous (string= (getf previous :role) "user")
-                      (listp (getf previous :content)))
-                 (setf (getf previous :content)
-                       (append (getf previous :content) block))
-                 (push (list :role "user" :content block) result))))
-          ((or (string= role "user") (string= role "assistant"))
-           (push (list :role role :content (claude-sdk-message-content message role))
-                 result)))))
+    (labels ((add-message (role content)
+               ;; CONTENT is NIL for a blank plain turn -> drop it. Otherwise
+               ;; append to the previous wire message when it shares ROLE, so
+               ;; dropping a blank turn between two same-role turns cannot
+               ;; produce an illegal adjacent same-role pair, and consecutive
+               ;; tool results still coalesce into one user message.
+               (when content
+                 (let ((previous (first result)))
+                   (if (and previous
+                            (string= (getf previous :role) role)
+                            (listp (getf previous :content))
+                            (listp content))
+                       (setf (getf previous :content)
+                             (append (getf previous :content) content))
+                       (push (list :role role :content content) result))))))
+      (dolist (message (completion-request-messages request))
+        (let ((role (or (getf message :role) "")))
+          (cond
+            ((string= role "system") nil)
+            ;; tool results always yield a (non-empty) block; they live in a
+            ;; user message and coalesce with an adjacent user turn.
+            ((string= role "tool")
+             (add-message "user" (claude-sdk-message-content message role)))
+            ((or (string= role "user") (string= role "assistant"))
+             (add-message role (claude-sdk-message-content message role)))))))
     (nreverse result)))
 
 (defun claude-sdk-tool-definition (tool)

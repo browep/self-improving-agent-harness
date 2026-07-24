@@ -171,6 +171,76 @@ can assert on exactly what COMPLETE tried to send."
     (ensure-true (not (member :metadata payload))
                  "payload omits metadata when CLAUDE_SDK_METADATA_USER_ID is absent"))
 
+  ;; ---- Empty content-block hardening (issue #88): the direct backend must
+  ;; never serialize an empty `text` block or an empty `tool_result.content`
+  ;; string; the Anthropic edge rejects both with HTTP 400
+  ;; ("text content blocks must be non-empty"). Long tool-heavy sessions
+  ;; accumulate tool turns with no stdout and blank plain turns. ----
+  (ensure-true (self-improving-agent-harness::claude-sdk-nonempty-string-p "x")
+               "nonempty-string-p: a non-blank string is non-empty")
+  (ensure-true (not (self-improving-agent-harness::claude-sdk-nonempty-string-p ""))
+               "nonempty-string-p: the empty string is empty")
+  (ensure-true (not (self-improving-agent-harness::claude-sdk-nonempty-string-p "   "))
+               "nonempty-string-p: a whitespace-only string is empty")
+  (ensure-true (not (self-improving-agent-harness::claude-sdk-nonempty-string-p nil))
+               "nonempty-string-p: nil is empty")
+  ;; Empty / nil / whitespace tool_result content becomes a non-empty placeholder;
+  ;; non-empty content is preserved exactly.
+  (ensure-equal "(tool returned no output)"
+                (self-improving-agent-harness::claude-sdk-tool-result-content "")
+                "empty tool_result content is replaced with a non-empty placeholder")
+  (ensure-equal "(tool returned no output)"
+                (self-improving-agent-harness::claude-sdk-tool-result-content nil)
+                "nil tool_result content is replaced with a non-empty placeholder")
+  (ensure-equal "(tool returned no output)"
+                (self-improving-agent-harness::claude-sdk-tool-result-content "   ")
+                "whitespace-only tool_result content is replaced with a placeholder")
+  (ensure-equal "real output"
+                (self-improving-agent-harness::claude-sdk-tool-result-content "real output")
+                "non-empty tool_result content is preserved exactly")
+  ;; End-to-end: a request with an empty tool result, a blank tool-call-less
+  ;; assistant turn, and a blank user turn must serialize to wire JSON with
+  ;; ZERO empty text blocks and ZERO empty tool_result content strings.
+  (let* ((request (claude-sdk-test-request
+                   :messages (list (list :role "user" :content "run it")
+                                   (list :role "assistant" :content nil
+                                         :tool-calls (list (list :id "toolu_1" :name "shot"
+                                                                 :arguments "{}")))
+                                   (list :role "tool" :tool-call-id "toolu_1" :content "")
+                                   (list :role "assistant" :content "")
+                                   (list :role "user" :content "and now?"))))
+         (payload (claude-sdk-request-payload request (make-claude-sdk-backend)))
+         (json (claude-sdk-request-json payload))
+         (parsed (yason:parse json))
+         (built (self-improving-agent-harness::openrouter-list (gethash "messages" parsed)))
+         (empty-text 0)
+         (empty-tool-result 0)
+         (prev-role nil)
+         (adjacent-same-role 0))
+    (labels ((walk (o)
+               (cond
+                 ((hash-table-p o)
+                  (let ((ty (gethash "type" o)))
+                    (when (and (equal ty "text") (equal (gethash "text" o) ""))
+                      (incf empty-text))
+                    (when (and (equal ty "tool_result")
+                               (let ((c (gethash "content" o)))
+                                 (or (null c) (equal c ""))))
+                      (incf empty-tool-result)))
+                  (maphash (lambda (k v) (declare (ignore k)) (walk v)) o))
+                 ((or (listp o) (vectorp o)) (map nil #'walk o)))))
+      (walk parsed))
+    (dolist (m built)
+      (let ((role (gethash "role" m)))
+        (when (and prev-role (equal prev-role role)) (incf adjacent-same-role))
+        (setf prev-role role)))
+    (ensure-equal 0 empty-text
+                  "serialized payload contains no empty text content blocks (#88)")
+    (ensure-equal 0 empty-tool-result
+                  "serialized payload contains no empty tool_result content (#88)")
+    (ensure-equal 0 adjacent-same-role
+                  "skipping blank plain turns preserves Anthropic role alternation (#88)"))
+
   ;; ---- Admission gate (issue #73): even with NO harness system prompt, the
   ;; payload must still carry the Agent SDK identity as a single leading system
   ;; block, because the Anthropic edge 429s OAuth requests that lack it. ----
@@ -259,13 +329,15 @@ can assert on exactly what COMPLETE tried to send."
                   "a backend-level max-tokens overrides the global default"))
 
   ;; Non-string message content (e.g. a stray tool-shaped turn) never crashes
-  ;; payload construction; it degrades to empty text rather than guessing.
-  (let ((payload (claude-sdk-request-payload
-                  (claude-sdk-test-request :messages (list (list :role "user" :content '(:not "a string"))))
-                  (make-claude-sdk-backend))))
-    (ensure-equal '((:type "text" :text ""))
-                  (getf (first (getf payload :messages)) :content)
-                  "non-string message content degrades to an empty text block instead of erroring"))
+  ;; payload construction; it is dropped rather than serialized as an empty
+  ;; text block, because Anthropic rejects empty text content blocks (#88).
+  (let* ((payload (claude-sdk-request-payload
+                   (claude-sdk-test-request
+                    :messages (list (list :role "user" :content '(:not "a string"))))
+                   (make-claude-sdk-backend)))
+         (messages (getf payload :messages)))
+    (ensure-equal 0 (length messages)
+                  "non-string message content is dropped instead of becoming an empty text block"))
 
   ;; ---- JSON encoding: snake_case wire fields, correct boolean/number
   ;; encoding, and control-character sanitization. ----
