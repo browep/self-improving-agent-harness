@@ -15,7 +15,11 @@ RUN CL_SOURCE_REGISTRY='(:source-registry :ignore-inherited-configuration)' \
         --eval '(quicklisp-quickstart:install :path "/opt/quicklisp")' \
         --eval '(ql:quickload (list :clog :drakma :yason))'
 ENV CL_SOURCE_REGISTRY='(:source-registry :ignore-inherited-configuration)'
-RUN printf '%s\n' '(load "/opt/quicklisp/setup.lisp")' > /root/.sbclrc
+RUN printf '%s\n' '(load "/opt/quicklisp/setup.lisp")' > /root/.sbclrc \
+    && mkdir -p /tmp \
+    && cp /root/.sbclrc /tmp/.sbclrc \
+    && chmod 644 /tmp/.sbclrc
+ENV HOME=/tmp
 
 # Route GitHub SSH remotes over HTTPS and use gh as the git credential helper,
 # so a GITHUB_TOKEN in the runtime env is sufficient for git push/pull (no SSH key).

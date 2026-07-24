@@ -40,14 +40,19 @@ function nativeToolEvents(message, results) {
 async function main() {
   const input = await readRequest();
   const toolResults = new Map();
-  const toolEvents = [];
+  const toolUseMessages = [];
   let final = null;
   const options = {
     model: input.model,
     maxTurns: input.max_turns ?? 8,
     settingSources: [],
     persistSession: false,
+    permissionMode: 'bypassPermissions',
   };
+  if (typeof input.mcp_config === 'string' && input.mcp_config) {
+    const parsed = JSON.parse(input.mcp_config);
+    options.mcpServers = parsed.mcpServers;
+  }
   if (typeof input.anthropic_base_url === 'string' && input.anthropic_base_url) {
     // Explicit capture/routing only; caller controls this field, not ambient env.
     // Set it before QUERY so the SDK/Claude child receives the same base URL.
@@ -61,9 +66,10 @@ async function main() {
         }
       }
     }
-    if (message?.type === 'assistant') toolEvents.push(...nativeToolEvents(message, toolResults));
+    if (message?.type === 'assistant') toolUseMessages.push(message);
     if (message?.type === 'result') final = message;
   }
+  const toolEvents = toolUseMessages.flatMap((message) => nativeToolEvents(message, toolResults));
   if (!final || typeof final.result !== 'string') throw new Error('Agent SDK stream lacked terminal result');
   process.stdout.write(JSON.stringify({
     schema: SCHEMA,

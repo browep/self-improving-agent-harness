@@ -39,7 +39,8 @@
        (setf (gethash "schema" table) +claude-shim-schema+
              (gethash "type" table) "request"
              (gethash "model" table) (completion-request-model request)
-             (gethash "prompt" table) (claude-shim-request-prompt request))
+             (gethash "prompt" table) (claude-shim-request-prompt request)
+             (gethash "mcp_config" table) (claude-mcp-config-json))
        ;; Capture routing is explicit; normal ambient ANTHROPIC_BASE_URL is ignored.
        (let ((base-url (uiop:getenv "CLAUDE_SHIM_ANTHROPIC_BASE_URL")))
          (when (and (stringp base-url) (plusp (length base-url)))

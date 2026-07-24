@@ -3,7 +3,8 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec "$repo_root/bin/container" \
+"$repo_root/bin/container" \
   --no-network \
   --non-interactive \
   --load scripts/run-tests.lisp
+"$repo_root/tests/claude-shim-bridge.sh"

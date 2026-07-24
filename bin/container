@@ -75,6 +75,12 @@ done
 # Building is explicit and repeatable; source is never copied into the image.
 docker build --tag "$image" "$repo_root"
 
+# The SDK tool path runs as the host user. Docker creates named volumes as root,
+# so initialize the disposable compilation cache before that unprivileged run.
+docker run --rm --user root --entrypoint /bin/sh \
+  --volume self-improving-agent-harness-cache:/cache "$image" \
+  -c 'mkdir -p /cache/common-lisp && chown -R 1000:1000 /cache' >/dev/null
+
 # Forward host-exported runtime config without printing values. Host exports
 # override .env for the same names. OPENAI_API_KEY is intentionally NOT
 # forwarded: OpenAI Platform API-key billing is out of scope; subscription
@@ -105,7 +111,7 @@ fi
 # The --no-network switch is understood only by bin/container and becomes
 # Docker's --network=none option before the image name.
 if [ -f "$repo_root/.env" ]; then
-  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} ${publish_option:-} --rm --init \
+  exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} ${publish_option:-} --rm --init --user "$(id -u):$(id -g)" \
     --env-file "$repo_root/.env" \
     --volume "$workspace_mount" \
     --volume self-improving-agent-harness-cache:/cache \
@@ -113,7 +119,7 @@ if [ -f "$repo_root/.env" ]; then
     --workdir /workspace "$image" "$@"
 fi
 
-exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} ${publish_option:-} --rm --init \
+exec docker run ${network_option:-} ${stdin_option:-} ${forward_env_options:-} ${host_key_options:-} ${publish_option:-} --rm --init --user "$(id -u):$(id -g)" \
   --volume "$workspace_mount" \
   --volume self-improving-agent-harness-cache:/cache \
   --volume self-improving-agent-harness-logs:/logs \
