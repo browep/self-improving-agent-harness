@@ -94,7 +94,8 @@ of registration order."
             ((string= name "codex") (make-codex-app-server-backend))
             ((string= name "claude") (make-claude-backend :session-id session-id))
             ((string= name "claude-sdk") (make-claude-sdk-backend))
-            (t (error "Backend must be synthetic, openrouter, codex, claude, or claude-sdk; got ~S." name)))))
+            ((string= name "claude-shim") (make-claude-shim-backend))
+            (t (error "Backend must be synthetic, openrouter, codex, claude, claude-sdk, or claude-shim; got ~S." name)))))
 
 (defun web-html-escape (text)
   (with-output-to-string (out)
@@ -113,7 +114,7 @@ of registration order."
 
 (defun web-backend-options ()
   "Return a list of available backends (some but not all)."
-  '("synthetic" "openrouter" "codex" "claude" "claude-sdk"))
+  '("synthetic" "openrouter" "codex" "claude" "claude-sdk" "claude-shim"))
 
 (defun web-model-options-for-backend (backend)
   "Return a list of model options for the given backend (some but not all)."
@@ -129,6 +130,8 @@ of registration order."
        "claude-sonnet-4-6"
        "claude-sonnet-4-5-20250929"
        "claude-haiku-4-5-20251001"))
+    ((string= backend "claude-shim")
+     '("claude-sonnet-5" "claude-opus-4-8" "claude-fable-5" "claude-haiku-4-5-20251001"))
     ((string= backend "openrouter")
      '("gpt-4-turbo"
        "gpt-4o"
