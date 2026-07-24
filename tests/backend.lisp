@@ -36,6 +36,7 @@
       (run-codex-backend-tests)
       (run-claude-backend-tests)
       (run-claude-sdk-backend-tests)
+      (run-claude-python-bridge-tests)
       (run-openrouter-adapter-tests)
       (run-synthetic-adapter-tests)
       (run-tool-loop-tests)

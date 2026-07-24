@@ -26,6 +26,7 @@
                (:file "src/chat-turn-report")
                (:file "src/chat-cli")
                (:file "src/claude-mcp")
+               (:file "src/claude-python-bridge")
                (:file "src/main"))
   :in-order-to ((test-op (test-op "self-improving-agent-harness/tests"))))
 
@@ -40,6 +41,7 @@
                (:file "tests/codex-backend")
                (:file "tests/claude-backend")
                (:file "tests/claude-sdk-backend")
+               (:file "tests/claude-python-bridge")
                (:file "tests/openrouter-adapter")
                (:file "tests/synthetic-adapter")
                (:file "tests/tool-loop")
