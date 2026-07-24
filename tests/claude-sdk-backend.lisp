@@ -10,19 +10,26 @@
 
 (defun with-claude-sdk-test-env (token thunk)
   (let ((saved-token (uiop:getenv "CLAUDE_CODE_OAUTH_TOKEN"))
-        (saved-anthropic (uiop:getenv "ANTHROPIC_API_KEY")))
+        (saved-anthropic (uiop:getenv "ANTHROPIC_API_KEY"))
+        (saved-user-id (uiop:getenv "CLAUDE_SDK_METADATA_USER_ID")))
     (unwind-protect
          (progn
            (if token
                (setf (uiop:getenv "CLAUDE_CODE_OAUTH_TOKEN") token)
                (sb-posix:unsetenv "CLAUDE_CODE_OAUTH_TOKEN"))
+           ;; Each test starts with the metadata override absent; a test that
+           ;; wants it sets it explicitly and this helper restores it after.
+           (sb-posix:unsetenv "CLAUDE_SDK_METADATA_USER_ID")
            (funcall thunk))
       (if saved-token
           (setf (uiop:getenv "CLAUDE_CODE_OAUTH_TOKEN") saved-token)
           (sb-posix:unsetenv "CLAUDE_CODE_OAUTH_TOKEN"))
       (if saved-anthropic
           (setf (uiop:getenv "ANTHROPIC_API_KEY") saved-anthropic)
-          (sb-posix:unsetenv "ANTHROPIC_API_KEY")))))
+          (sb-posix:unsetenv "ANTHROPIC_API_KEY"))
+      (if saved-user-id
+          (setf (uiop:getenv "CLAUDE_SDK_METADATA_USER_ID") saved-user-id)
+          (sb-posix:unsetenv "CLAUDE_SDK_METADATA_USER_ID")))))
 
 (defun claude-sdk-test-request (&key (content "hello") (model "claude-sdk-fixture-model")
                                   (messages nil messages-supplied-p) options)
@@ -158,7 +165,33 @@ can assert on exactly what COMPLETE tried to send."
                   "payload messages exclude the system turn and preserve content-block order")
     (ensure-true (not (member :tools payload)) "payload omits tools when the request does not define them")
     (ensure-true (not (member :tool-choice payload)) "payload never forces tool_choice")
-    (ensure-true (not (member :resume payload)) "payload carries no resume-style field"))
+    (ensure-true (not (member :resume payload)) "payload carries no resume-style field")
+    (ensure-true (not (member :metadata payload))
+                 "payload omits metadata when CLAUDE_SDK_METADATA_USER_ID is absent"))
+
+  ;; ---- Optional metadata.user_id: the official Agent SDK sends a
+  ;; metadata.user_id the direct backend historically omitted. An env seam
+  ;; (CLAUDE_SDK_METADATA_USER_ID) supplies the exact observed value for a
+  ;; controlled comparison, without hardcoding or deriving one. Blank is absent;
+  ;; a nonblank value is trimmed and serialized under the snake_case user_id. ----
+  (with-claude-sdk-test-env
+      "sdk-oauth-token"
+    (lambda ()
+      (setf (uiop:getenv "CLAUDE_SDK_METADATA_USER_ID") "   ")
+      (ensure-true (not (member :metadata (claude-sdk-request-payload
+                                           (claude-sdk-test-request)
+                                           (make-claude-sdk-backend))))
+                   "payload treats a blank metadata user id as absent")
+      (setf (uiop:getenv "CLAUDE_SDK_METADATA_USER_ID") "  sdk-user-fixture  ")
+      (let* ((payload (claude-sdk-request-payload (claude-sdk-test-request)
+                                                  (make-claude-sdk-backend)))
+             (json (claude-sdk-request-json payload)))
+        (ensure-equal '(:user-id "sdk-user-fixture") (getf payload :metadata)
+                      "payload includes the trimmed metadata user id when supplied")
+        (ensure-true (search "\"metadata\"" json)
+                     "serialized payload carries a metadata object")
+        (ensure-true (search "\"user_id\":\"sdk-user-fixture\"" json)
+                     "serialized metadata uses the snake_case user_id key and trimmed value"))))
 
   ;; ---- Native Anthropic tool declarations are derived directly from the
   ;; harness's OpenAI-compatible function definitions. No CLI/MCP fallback or

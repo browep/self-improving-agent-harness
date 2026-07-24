@@ -220,6 +220,19 @@ override, then the conservative global default."
         (positive-integer (claude-sdk-backend-max-tokens backend))
         *claude-sdk-default-max-tokens*)))
 
+(defun claude-sdk-metadata-user-id ()
+  "Return the optional Anthropic Messages `metadata.user_id` override, or NIL.
+
+Read from CLAUDE_SDK_METADATA_USER_ID at request time. The official Agent SDK
+sends a `metadata.user_id` the direct backend historically omitted; this env
+seam lets a controlled comparison supply the exact observed value without
+hardcoding or deriving one. Blank/whitespace is treated as absent."
+  (let ((value (uiop:getenv "CLAUDE_SDK_METADATA_USER_ID")))
+    (when value
+      (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+        (when (plusp (length trimmed))
+          trimmed)))))
+
 (defun claude-sdk-request-payload (request backend)
   "Return REQUEST as an Anthropic Messages API payload plist, before JSON encoding.
 
@@ -227,7 +240,8 @@ MODEL, MAX-TOKENS, MESSAGES, STREAM, optional SYSTEM, and native TOOLS.
 Deliberately no `tool_choice` or resume-style field: tool execution uses the
 harness loop's ordinary next request."
   (let ((system (claude-sdk-system-prompt request))
-        (tools (claude-sdk-request-tools request)))
+        (tools (claude-sdk-request-tools request))
+        (metadata-user-id (claude-sdk-metadata-user-id)))
     (append
      (list :model (completion-request-model request)
            :max-tokens (claude-sdk-request-max-tokens request backend)
@@ -237,6 +251,7 @@ harness loop's ordinary next request."
            :diagnostics (list :previous-message-id nil)
            :output-config (list :effort "high")
            :thinking (list :type "adaptive"))
+     (when metadata-user-id (list :metadata (list :user-id metadata-user-id)))
      (when system (list :system (list (list :type "text" :text system))))
      (when tools (list :tools tools)))))
 
