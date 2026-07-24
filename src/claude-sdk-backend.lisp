@@ -72,7 +72,7 @@ or blank."
   "Captured `anthropic-version` header value.")
 
 (defparameter *claude-sdk-anthropic-beta*
-  "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,structured-outputs-2025-12-15,cache-diagnosis-2026-04-07"
+  "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07"
   "Captured TypeScript Agent SDK `anthropic-beta` header value for OAuth auth.")
 
 (defparameter *claude-sdk-user-agent* "claude-cli/2.1.218 (external, sdk-ts, agent-sdk/0.3.218)"
@@ -119,6 +119,9 @@ any signalled condition."
         (cons "x-stainless-arch" "x64")
         (cons "x-stainless-runtime" "node")
         (cons "x-stainless-runtime-version" "v26.3.0")
+        (cons "x-stainless-retry-count" "0")
+        (cons "x-stainless-timeout" "600")
+        (cons "anthropic-dangerous-direct-browser-access" "true")
         (cons "anthropic-beta" *claude-sdk-anthropic-beta*)))
 
 ;;; ---------------------------------------------------------------------

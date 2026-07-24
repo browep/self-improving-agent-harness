@@ -31,7 +31,6 @@ python3 - "$work" <<'PY'
 import json, sys
 for name in ('typescript-sdk-all.json', 'lisp-sdk-all.json'):
     flows = json.load(open(f'{sys.argv[1]}/{name}'))
-    print(json.dumps({'capture': name, 'flows': [
-        {'requested_model': f['requested_model'], 'status': f['status'],
-         'response_content_type': f['response_content_type']} for f in flows]}, sort_keys=True))
+    matching = [flow for flow in flows if flow['requested_model'] == 'claude-sonnet-5']
+    print(json.dumps({'capture': name, 'matching_sonnet5_flows': matching}, sort_keys=True))
 PY

@@ -124,7 +124,7 @@ can assert on exactly what COMPLETE tried to send."
                   "x-app identifies as cli")
     (ensure-equal *claude-sdk-anthropic-beta* (cdr (assoc "anthropic-beta" headers :test #'string-equal))
                   "anthropic-beta matches the captured contract")
-    (ensure-equal "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,structured-outputs-2025-12-15,cache-diagnosis-2026-04-07" *claude-sdk-anthropic-beta*
+    (ensure-equal "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07" *claude-sdk-anthropic-beta*
                   "anthropic-beta matches the captured TypeScript SDK contract"))
   (ensure-equal "https://api.anthropic.com/v1/messages" *claude-sdk-messages-url*
                 "the Messages endpoint is the captured URL")
