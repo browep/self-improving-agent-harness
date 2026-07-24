@@ -218,6 +218,16 @@
    #:*claude-sdk-default-max-tokens*
    #:*claude-sdk-request-timeout-seconds*
    #:*claude-sdk-connection-timeout-seconds*
+   ;; Official TypeScript Agent SDK bridge (claude-shim)
+   #:claude-shim-backend
+   #:make-claude-shim-backend
+   #:claude-shim-backend-error
+   #:claude-shim-backend-error-reason
+   #:claude-shim-backend-runner
+   #:claude-shim-backend-timeout
+   #:claude-shim-response-from-json
+   #:*claude-shim-command*
+   #:*claude-shim-request-timeout-seconds*
    ;; Harness-owned Claude MCP bridge (schemas project from Lisp definitions)
    #:claude-mcp-tool-specifications
    #:claude-mcp-config-json
