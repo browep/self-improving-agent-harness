@@ -382,7 +382,7 @@ after a turn completes."
                                 (clog:script-id composer)))))
     (labels ((render-active-session ()
                (setf (clog:inner-html chat-log) ""
-                     (clog:inner-html state) (cond (request-in-progress-p "Request in progress — waiting for provider response (up to 120 seconds)…")
+                     (clog:inner-html state) (cond (request-in-progress-p "in progress")
                                                    (session "ready")
                                                    (t "not started"))
                      (clog:inner-html session-id) (if session (web-session-id session) "")
@@ -477,7 +477,7 @@ after a turn completes."
              ;; looks like a dead Send click.
              (setf request-in-progress-p t
                    *web-turn-in-progress-p* t
-                   (clog:inner-html state) "Request in progress — waiting for provider response (up to 120 seconds)…"
+                   (clog:inner-html state) "in progress"
                    (clog:disabledp send) t)
              ;; Clear the input and show the user message right away, before the
              ;; thinking indicator, so it sits above the indicator in the DOM.
@@ -511,9 +511,16 @@ after a turn completes."
                                           window.__harnessThinkingTimer=setInterval(function(){~
                                             var el=~A;~
                                             if(el){var s=((Date.now()-window.__harnessThinkingStart)/1000).toFixed(1);~
-                                            el.textContent='Thinking\u2026 '+s+'s';}~
+                                            el.textContent='Thinking… '+s+'s';}~
                                           },100);"
                                          (clog:script-id indicator)))
+               ;; Scroll the chat log so the indicator itself is visible right
+               ;; away; otherwise a long transcript can leave "Thinking..."
+               ;; off-screen above the fold until the turn completes. Issue #48.
+               (clog:js-execute chat-log
+                                (format nil "~A.scrollTop = ~A.scrollHeight;"
+                                        (clog:script-id chat-log)
+                                        (clog:script-id chat-log)))
                (unwind-protect
                     (progn
                       ;; Stream events into the chat log as they happen. The
