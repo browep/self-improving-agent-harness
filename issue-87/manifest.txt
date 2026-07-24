@@ -1,0 +1,7 @@
+result=PASS
+nonce=TOOL-WEB-3993908612-196613
+url=http://127.0.0.1:18080/
+backend=claude-sdk
+model=claude-sonnet-5
+fix-commit=52b9c96
+web-model-default-bug-fixed=true
