@@ -32,6 +32,9 @@ also pass --model/--max-rounds. Errors (no snapshot) fall back to a fresh sessio
               does not spawn the Claude Code CLI. Text-only (no tools, no
               session resume); streamed responses are buffered internally into
               one final answer per call.
+  claude-shim Official TypeScript Agent SDK via CLAUDE_CODE_OAUTH_TOKEN
+              (no API key; never ANTHROPIC_API_KEY). SDK-native tools execute
+              in the child runtime and surface as lifecycle events only.
 
 HARNESS_BACKEND=openai is rejected. --backend openai errors at the CLI.
 
@@ -145,13 +148,13 @@ fi
 # Normalize backend name (case-insensitive).
 backend_normalized=$(printf '%s' "$backend" | tr '[:upper:]' '[:lower:]')
 case "$backend_normalized" in
-  openrouter|synthetic|codex|claude|claude-sdk) backend=$backend_normalized ;;
+  openrouter|synthetic|codex|claude|claude-sdk|claude-shim) backend=$backend_normalized ;;
   openai)
     printf '%s\n' 'bin/chat: --backend openai is not supported (no OPENAI_API_KEY / OpenAI Platform billing). Use --backend codex for ChatGPT/Codex subscription usage, or openrouter.' >&2
     exit 2
     ;;
   *)
-    printf '%s\n' "bin/chat: --backend must be openrouter, synthetic, codex, claude, or claude-sdk, got: $backend" >&2
+    printf '%s\n' "bin/chat: --backend must be openrouter, synthetic, codex, claude, claude-sdk, or claude-shim, got: $backend" >&2
     exit 2
     ;;
 esac

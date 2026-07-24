@@ -53,7 +53,7 @@
   (handler-case
       (multiple-value-bind (stdout stderr status)
           (uiop:run-program *claude-shim-command*
-                            :input (claude-shim-request-json request)
+                            :input (make-string-input-stream (claude-shim-request-json request))
                             :output :string :error-output :string
                             :ignore-error-status t)
         (unless (and (integerp status) (zerop status))

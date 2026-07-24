@@ -99,6 +99,22 @@ OpenAI Platform API-key billing is rejected. No OPENAI_API_KEY path exists."
          (ensure-true (typep b 'self-improving-agent-harness:claude-sdk-backend)
                       "HARNESS_BACKEND=claude-sdk is case-insensitive"))
 
+       ;; claude-shim is the official TypeScript Agent SDK bridge, distinct from
+       ;; both the direct Messages transport and the Claude CLI backend.
+       (set-env "HARNESS_BACKEND" "claude-shim")
+       (let ((b (select-chat-backend)))
+         (ensure-true (typep b 'self-improving-agent-harness:claude-shim-backend)
+                      "HARNESS_BACKEND=claude-shim selects the TypeScript SDK bridge")
+         (ensure-equal "claude-shim" (backend-name b)
+                       "claude-shim backend has a stable provider identity")
+         (ensure-true (not (backend-api-key-configured-p b))
+                      "claude-shim subscription backend is not an API-key backend"))
+
+       (set-env "HARNESS_BACKEND" "CLAUDE-SHIM")
+       (let ((b (select-chat-backend)))
+         (ensure-true (typep b 'self-improving-agent-harness:claude-shim-backend)
+                      "HARNESS_BACKEND=claude-shim is case-insensitive"))
+
        ;; OpenAI Platform API-key path is explicitly rejected.
        (set-env "HARNESS_BACKEND" "openai")
        (handler-case

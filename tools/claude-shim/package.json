@@ -1,0 +1,10 @@
+{
+  "name": "self-improving-agent-harness-claude-shim",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Locked official Claude Agent SDK dependency for the Common Lisp claude-shim bridge.",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.218"
+  }
+}

@@ -50,6 +50,14 @@ RUN npm install --global --no-fund --no-audit "@anthropic-ai/claude-code@${CLAUD
     && claude --version \
     && npm cache clean --force
 
+# The claude-shim calls the official Agent SDK directly. Keep its package lock
+# in the repository and install it in an image-owned path because /workspace is
+# a runtime read-only bind mount.
+COPY tools/claude-shim/package.json tools/claude-shim/package-lock.json /opt/claude-shim/
+RUN npm ci --prefix /opt/claude-shim --ignore-scripts --no-fund --no-audit \
+    && npm cache clean --force
+ENV CLAUDE_SHIM_SDK_MODULE=file:///opt/claude-shim/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
+
 # Headless Chromium (Playwright) for driving the CLOG web UI from inside the
 # container (e.g. browser-driven smoke tests / screenshots). Only the
 # chromium-headless-shell is installed (--only-shell): the harness launches
