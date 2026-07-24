@@ -29,17 +29,19 @@ send handler checks this after the turn completes and triggers the refresh.")
 
 (defun web-load-durable-session (descriptor)
   "Materialize a durable CLI or web snapshot as a selectable browser session."
-  (let ((durable-id (getf descriptor :session-id)))
+  (let* ((durable-id (getf descriptor :session-id))
+         (backend-name (let ((saved (getf descriptor :backend)))
+                         (if (member saved '("synthetic" "openrouter" "codex" "claude" "claude-sdk") :test #'string=)
+                             saved
+                             "claude-sdk"))))
     (or (find durable-id (web-known-sessions :refresh nil)
               :key #'web-session-durable-session-id :test #'string=)
         (web-register-session
          (make-web-session
-          :backend (web-selected-backend (let ((saved (getf descriptor :backend)))
-                                           (if (member saved '("synthetic" "openrouter" "codex" "claude" "claude-sdk") :test #'string=)
-                                               saved
-                                               "claude-sdk"))
+          :backend (web-selected-backend backend-name
                                          :session-id (getf descriptor :provider-session-id))
-          :model (or (getf descriptor :model) "claude-haiku-4-5-20251001")
+          :model (or (getf descriptor :model)
+                     (web-default-model-for-backend backend-name))
           :max-rounds (or (getf descriptor :max-rounds) 60)
           :history (getf descriptor :history)
           :durable-session-id durable-id
@@ -147,12 +149,39 @@ of registration order."
        "opus"))
     (t '())))
 
+(defun web-default-model-for-backend (backend)
+  "Return the Web UI default model for BACKEND (a backend NAME string).
+
+HARNESS_CHAT_MODEL overrides the UI default when non-blank. Otherwise
+claude-sdk defaults to claude-sonnet-5: its direct Messages payload always
+sends adaptive thinking, which Haiku (the previous hardcoded default) rejects
+with HTTP 400, so the shipped Haiku default was broken for claude-sdk. Other
+backend defaults are preserved. BACKEND may be nil or blank (defensive);
+such values fall through to the Haiku default rather than erroring."
+  (let* ((override (uiop:getenv "HARNESS_CHAT_MODEL"))
+         (trimmed (and override
+                       (string-trim '(#\Space #\Tab #\Newline #\Return) override)))
+         (name (string-downcase
+                (string-trim '(#\Space #\Tab #\Newline #\Return) (or backend "")))))
+    (if (and trimmed (plusp (length trimmed)))
+        trimmed
+        (cond
+          ((string= name "claude-sdk") "claude-sonnet-5")
+          (t "claude-haiku-4-5-20251001")))))
+
 (defun web-create-editable-dropdown (parent options default-value)
   "Create a select element with predefined options and styling."
   (let ((select (clog:create-select parent)))
     (clog:add-select-option select "" "-- Select or type --")
     (dolist (option options)
       (clog:add-select-option select option option))
+    ;; A native <select> silently rejects a value that is not one of its
+    ;; options, so a HARNESS_CHAT_MODEL override (or any default) not already
+    ;; in OPTIONS would fail to stick. Add it explicitly when missing.
+    (when (and default-value
+               (plusp (length default-value))
+               (not (member default-value options :test #'string=)))
+      (clog:add-select-option select default-value default-value))
     (setf (clog:value select) default-value)
     (web-style select "padding:6px;font-family:ui-monospace,monospace")
     select))
@@ -311,9 +340,11 @@ after a turn completes."
          (run-label (clog:create-div controls :content "Harness run ID:"))
          (run-id (web-mark (clog:create-div controls :content (or *web-run-session-id* "not supplied")) "harness-run-id"))
          (backend-label (clog:create-div controls :content "Backend:"))
-         (backend-input (web-mark (web-create-editable-dropdown controls (web-backend-options) "claude-sdk") "backend-input"))
+         (default-backend-name "claude-sdk")
+         (default-model-name (web-default-model-for-backend default-backend-name))
+         (backend-input (web-mark (web-create-editable-dropdown controls (web-backend-options) default-backend-name) "backend-input"))
          (model-label (clog:create-div controls :content "Model:"))
-         (model-input (web-mark (web-create-editable-dropdown controls (web-model-options-for-backend "claude-sdk") "claude-haiku-4-5-20251001") "model-input"))
+         (model-input (web-mark (web-create-editable-dropdown controls (web-model-options-for-backend default-backend-name) default-model-name) "model-input"))
          (start (web-mark (clog:create-button controls :content "New session") "start-session"))
          (clear (web-mark (clog:create-button controls :content "Clear session") "clear-session"))
          (state (web-mark (clog:create-div controls :content "not started") "session-state"))
@@ -337,8 +368,8 @@ after a turn completes."
          (request-in-progress-p nil)
          (sessions-collapsed-p t))
     (declare (ignore heading run-label run-id browser-label durable-label backend-label model-label))
-    (setf (clog:value backend-input) "claude-sdk"
-          (clog:value model-input) "claude-haiku-4-5-20251001")
+    (setf (clog:value backend-input) default-backend-name
+          (clog:value model-input) default-model-name)
     (setf (clog:attribute composer "placeholder") "Enter a prompt")
     (setf (clog:disabledp send) t)
     (clog:set-on-focus
@@ -359,7 +390,13 @@ after a turn completes."
                      (clog:disabledp send) (or (null session) request-in-progress-p)
                      (clog:value composer) ""
                      (clog:value backend-input) (if session (backend-name (chat-session-backend (web-session-chat-session session))) "synthetic")
-                     (clog:value model-input) (if session (chat-session-model (web-session-chat-session session)) "claude-haiku-4-5-20251001"))
+                     ;; setf evaluates value forms left-to-right, so backend-input
+                     ;; is already updated above before we read it here to derive
+                     ;; the matching model default. Do not reorder these two pairs.
+                     (clog:value model-input) (if session (chat-session-model (web-session-chat-session session))
+                                                  (web-default-model-for-backend
+                                                   (string-downcase (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                                                                 (clog:value backend-input))))))
                (when session
                  (dolist (event (web-session-events session))
                    (web-render-chat-message chat-log event))

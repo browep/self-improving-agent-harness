@@ -111,5 +111,50 @@
                "assistant messages belong in the browser chat log")
   (ensure-true (web-event-visible-in-chat-log-p '(:kind "tool-call-completed"))
                "tool results are visible in the browser transcript")
+  ;; --- web-default-model-for-backend (issue #87 Web UI model bug) ---------
+  ;; The Web UI dropdown previously hardcoded Haiku, which 400s on the direct
+  ;; claude-sdk backend (adaptive thinking). The helper now defaults claude-sdk
+  ;; to sonnet-5, preserves Haiku elsewhere, honors HARNESS_CHAT_MODEL, and is
+  ;; defensive about nil/blank/case in the backend name.
+  (let ((saved (uiop:getenv "HARNESS_CHAT_MODEL")))
+    (unwind-protect
+         (progn
+           ;; Env override unset: backend-specific defaults.
+           (setf (uiop:getenv "HARNESS_CHAT_MODEL") "")
+           (ensure-equal "claude-sonnet-5"
+                         (self-improving-agent-harness::web-default-model-for-backend "claude-sdk")
+                         "claude-sdk Web UI default is claude-sonnet-5, not Haiku")
+           (ensure-equal "claude-haiku-4-5-20251001"
+                         (self-improving-agent-harness::web-default-model-for-backend "openrouter")
+                         "non-claude-sdk backends keep the Haiku default")
+           (ensure-equal "claude-haiku-4-5-20251001"
+                         (self-improving-agent-harness::web-default-model-for-backend nil)
+                         "nil backend falls through to the Haiku default without erroring")
+           (ensure-equal "claude-haiku-4-5-20251001"
+                         (self-improving-agent-harness::web-default-model-for-backend "")
+                         "blank backend falls through to the Haiku default")
+           (ensure-equal "claude-sonnet-5"
+                         (self-improving-agent-harness::web-default-model-for-backend "  Claude-SDK  ")
+                         "backend name is normalized (case + whitespace) before matching")
+           ;; Env override non-blank: wins for every backend.
+           (setf (uiop:getenv "HARNESS_CHAT_MODEL") "custom/model")
+           (ensure-equal "custom/model"
+                         (self-improving-agent-harness::web-default-model-for-backend "claude-sdk")
+                         "HARNESS_CHAT_MODEL overrides the claude-sdk default")
+           (ensure-equal "custom/model"
+                         (self-improving-agent-harness::web-default-model-for-backend "openrouter")
+                         "HARNESS_CHAT_MODEL overrides non-claude-sdk defaults too")
+           ;; Whitespace-only override is ignored; blank-padded override trimmed.
+           (setf (uiop:getenv "HARNESS_CHAT_MODEL") "   ")
+           (ensure-equal "claude-sonnet-5"
+                         (self-improving-agent-harness::web-default-model-for-backend "claude-sdk")
+                         "whitespace-only HARNESS_CHAT_MODEL is ignored")
+           (setf (uiop:getenv "HARNESS_CHAT_MODEL") "  gpt-4o  ")
+           (ensure-equal "gpt-4o"
+                         (self-improving-agent-harness::web-default-model-for-backend "openrouter")
+                         "HARNESS_CHAT_MODEL override is trimmed"))
+      (if saved
+          (setf (uiop:getenv "HARNESS_CHAT_MODEL") saved)
+          (sb-posix:unsetenv "HARNESS_CHAT_MODEL"))))
   (format t "Web-session tests passed.~%")
   t)
