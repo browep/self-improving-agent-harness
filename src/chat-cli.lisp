@@ -143,10 +143,13 @@ designator path.")
 
 
 (defun chat-options ()
-  (list :temperature 0.2
-        :max-tokens *chat-max-tokens*
-        :tool-choice "auto"
-        :tools (chat-tool-definitions)))
+  (let ((max-tokens-override (uiop:getenv "HARNESS_CHAT_MAX_TOKENS")))
+    (list :temperature 0.2
+          :max-tokens (if (and max-tokens-override (plusp (length max-tokens-override)))
+                          (parse-positive-integer max-tokens-override)
+                          *chat-max-tokens*)
+          :tool-choice "auto"
+          :tools (chat-tool-definitions))))
 
 (defun chat-handlers ()
   "Return the live tool-handler alist using symbol designators.

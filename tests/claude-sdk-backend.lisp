@@ -143,12 +143,19 @@ can assert on exactly what COMPLETE tried to send."
     (ensure-equal *claude-sdk-default-max-tokens* (getf payload :max-tokens)
                   "payload defaults max_tokens when the request has none")
     (ensure-equal t (getf payload :stream) "payload always requests stream:true")
-    (ensure-equal "be terse" (getf payload :system)
-                  "payload extracts the system-role message text")
-    (ensure-equal '(("user" . "hi") ("assistant" . "hello") ("user" . "again"))
+    (ensure-equal '(:edits ((:type "clear_thinking_20251015" :keep "all")))
+                  (getf payload :context-management)
+                  "payload aligns the observed SDK clear-thinking context-management setting")
+    (ensure-equal '(:previous-message-id nil) (getf payload :diagnostics)
+                  "payload carries the observed first-turn diagnostics field")
+    (ensure-equal '((:type "text" :text "be terse")) (getf payload :system)
+                  "payload lifts system text into Anthropic content blocks")
+    (ensure-equal '(("user" . ((:type "text" :text "hi")))
+                    ("assistant" . ((:type "text" :text "hello")))
+                    ("user" . ((:type "text" :text "again"))))
                   (mapcar (lambda (m) (cons (getf m :role) (getf m :content)))
                           (getf payload :messages))
-                  "payload messages exclude the system turn and preserve order/content")
+                  "payload messages exclude the system turn and preserve content-block order")
     (ensure-true (not (member :tools payload)) "payload omits tools when the request does not define them")
     (ensure-true (not (member :tool-choice payload)) "payload never forces tool_choice")
     (ensure-true (not (member :resume payload)) "payload carries no resume-style field"))
@@ -199,8 +206,9 @@ can assert on exactly what COMPLETE tried to send."
   (let ((payload (claude-sdk-request-payload
                   (claude-sdk-test-request :messages (list (list :role "user" :content '(:not "a string"))))
                   (make-claude-sdk-backend))))
-    (ensure-equal "" (getf (first (getf payload :messages)) :content)
-                  "non-string message content degrades to empty text instead of erroring"))
+    (ensure-equal '((:type "text" :text ""))
+                  (getf (first (getf payload :messages)) :content)
+                  "non-string message content degrades to an empty text block instead of erroring"))
 
   ;; ---- JSON encoding: snake_case wire fields, correct boolean/number
   ;; encoding, and control-character sanitization. ----
@@ -215,9 +223,12 @@ can assert on exactly what COMPLETE tried to send."
     (ensure-equal *claude-sdk-default-max-tokens* (gethash "max_tokens" parsed)
                   "wire JSON uses snake_case max_tokens")
     (ensure-equal t (gethash "stream" parsed) "wire JSON stream is boolean true")
-    (ensure-equal "sys" (gethash "system" parsed) "wire JSON system field round-trips")
+    (ensure-equal "sys" (gethash "text" (first (coerce (gethash "system" parsed) 'list)))
+                  "wire JSON system text round-trips through a content block")
     (ensure-true (not (search (string #\Bel)
-                              (gethash "content" (first (coerce (gethash "messages" parsed) 'list)))))
+                              (gethash "text" (first (coerce (gethash "content"
+                                                                (first (coerce (gethash "messages" parsed) 'list)))
+                                                               'list)))))
                  "raw control characters are escaped, never sent literally in message content"))
 
   ;; ---- SSE frame parsing: generic Server-Sent Events semantics, independent
@@ -409,7 +420,9 @@ data: {\"type\":\"message_stop\"}
                          "COMPLETE sends the requested model")
            (ensure-equal t (gethash "stream" sent) "COMPLETE always requests stream:true")
            (ensure-true (search "hi there"
-                                (gethash "content" (first (coerce (gethash "messages" sent) 'list))))
+                                (gethash "text" (first (coerce (gethash "content"
+                                                                  (first (coerce (gethash "messages" sent) 'list)))
+                                                                 'list))))
                         "COMPLETE forwards the user turn text in the wire payload"))))))
 
   ;; ---- Full offline tool-loop round trip: the first streamed tool_use is

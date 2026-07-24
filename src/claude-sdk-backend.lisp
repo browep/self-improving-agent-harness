@@ -170,7 +170,7 @@ the system prompt."
        (append (when (and (stringp text) (plusp (length text)))
                  (list (list :type "text" :text text)))
                (mapcar #'claude-sdk-tool-use-block (getf message :tool-calls))))
-      (t (if (stringp text) text "")))))
+      (t (list (list :type "text" :text (if (stringp text) text "")))))))
 
 (defun claude-sdk-request-messages (request)
   "Return REQUEST turns as Anthropic Messages API message objects.
@@ -232,8 +232,12 @@ harness loop's ordinary next request."
      (list :model (completion-request-model request)
            :max-tokens (claude-sdk-request-max-tokens request backend)
            :messages (claude-sdk-request-messages request)
-           :stream t)
-     (when system (list :system system))
+           :stream t
+           :context-management (list :edits (list (list :type "clear_thinking_20251015" :keep "all")))
+           :diagnostics (list :previous-message-id nil)
+           :output-config (list :effort "high")
+           :thinking (list :type "adaptive"))
+     (when system (list :system (list (list :type "text" :text system))))
      (when tools (list :tools tools)))))
 
 (defun claude-sdk-request-json (payload)

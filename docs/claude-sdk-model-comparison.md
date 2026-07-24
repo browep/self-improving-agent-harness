@@ -4,9 +4,9 @@ This optional local diagnostic compares one official TypeScript Agent SDK Messag
 
 ## Safety contract
 
-The runner accepts `CLAUDE_CODE_OAUTH_TOKEN` only through the normal Docker runtime environment. It never prints or stores its value. The proxy addon persists manifests only, and excludes authorization values, cookies, API keys, request/response bodies, prompts, and model output.
+The proxy addon persists reviewed, redacted manifests only. It excludes authorization values, cookies, API keys, credential-like payload fields, prompts, tool-result content, and model output. It retains **every other request/response header value** and a complete redacted payload view: model/configuration/metadata/tool-schema values are literal, while textual content is replaced by length markers.
 
-Recorded evidence is limited to method/host/path, requested model, non-sensitive headers, names of redacted headers, JSON key/type shapes, HTTP status, response content type, and safe rate-limit/request metadata.
+Recorded evidence therefore includes method/host/path, requested model, all non-sensitive headers, names of redacted headers, complete JSON key/type shapes, full non-content configuration and tool definitions, HTTP status, response headers, and response content type.
 
 ## Run
 

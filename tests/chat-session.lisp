@@ -114,5 +114,15 @@
     (ensure-true (search "native tools/tool_calls"
                          (getf (getf (first (getf options :tools)) :function) :description))
                  "run_shell tool description requires native tool_calls"))
+  (let ((saved (uiop:getenv "HARNESS_CHAT_MAX_TOKENS")))
+    (unwind-protect
+         (progn
+           (setf (uiop:getenv "HARNESS_CHAT_MAX_TOKENS") "64000")
+           (ensure-equal 64000
+                         (getf (self-improving-agent-harness:chat-options) :max-tokens)
+                         "chat-options honors an explicit positive max-tokens environment override"))
+      (if saved
+          (setf (uiop:getenv "HARNESS_CHAT_MAX_TOKENS") saved)
+          (sb-posix:unsetenv "HARNESS_CHAT_MAX_TOKENS"))))
   (format t "Chat-session tests passed.~%")
   t)
