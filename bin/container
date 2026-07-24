@@ -92,6 +92,9 @@ fi
 if [ "${CLAUDE_CODE_OAUTH_TOKEN+x}" = x ]; then
   host_key_options="$host_key_options --env CLAUDE_CODE_OAUTH_TOKEN"
 fi
+if [ "${CLAUDE_SHIM_ANTHROPIC_BASE_URL+x}" = x ]; then
+  host_key_options="$host_key_options --env CLAUDE_SHIM_ANTHROPIC_BASE_URL"
+fi
 if [ "${HARNESS_LIVE_CODEX_SMOKE+x}" = x ]; then
   host_key_options="$host_key_options --env HARNESS_LIVE_CODEX_SMOKE"
 fi

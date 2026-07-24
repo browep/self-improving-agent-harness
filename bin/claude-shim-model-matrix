@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Opt-in, repeatable current-model matrix for claude-shim subscription evidence.
+set -euo pipefail
+
+[ "${HARNESS_LIVE_CLAUDE_SHIM_MATRIX:-}" = 1 ] || {
+  printf '%s\n' 'SKIP: set HARNESS_LIVE_CLAUDE_SHIM_MATRIX=1 to run the billable claude-shim model matrix.' >&2
+  exit 77
+}
+: "${CLAUDE_CODE_OAUTH_TOKEN:?CLAUDE_CODE_OAUTH_TOKEN is required}"
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+run_id=$(date -u +%Y%m%dT%H%M%SZ)
+evidence_root=${CLAUDE_SHIM_EVIDENCE_ROOT:-"$HOME/claude-shim-evidence"}
+evidence_dir="$evidence_root/$run_id-matrix"
+mkdir -p "$evidence_dir"
+
+curl -fsS \
+  -H "Authorization: Bearer $CLAUDE_CODE_OAUTH_TOKEN" \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'anthropic-beta: oauth-2025-04-20' \
+  https://api.anthropic.com/v1/models > "$evidence_dir/models.json"
+
+mapfile -t models < <(python3 - "$evidence_dir/models.json" <<'PY'
+import json, sys
+models=json.load(open(sys.argv[1])).get('data', [])
+def choose(label):
+    label=label.lower()
+    candidates=[x for x in models if label in (x.get('display_name') or '').lower()]
+    if not candidates:
+        raise SystemExit('missing required current model: '+label)
+    print(candidates[0]['id'])
+choose('sonnet 5')
+choose('opus 4.8')
+for item in models:
+    if item.get('id') not in set():
+        # Skip required candidates and select the first other listed exact ID.
+        if 'sonnet 5' not in (item.get('display_name') or '').lower() and 'opus 4.8' not in (item.get('display_name') or '').lower():
+            print(item['id']); break
+PY
+)
+
+[ "${#models[@]}" -eq 3 ] || { printf '%s\n' 'model selection did not yield three candidates' >&2; exit 1; }
+printf '%s\n' "${models[@]}" > "$evidence_dir/selected-models.txt"
+
+for model in "${models[@]}"; do
+  prompt="Reply exactly with ${model}_OK."
+  set +e
+  "$repo_root/bin/chat" --backend claude-shim --model "$model" --max-rounds 1 --prompt "$prompt" \
+    >"$evidence_dir/$model.stdout" 2>"$evidence_dir/$model.stderr"
+  status=$?
+  set -e
+  printf '%s\t%s\n' "$model" "$status" >> "$evidence_dir/outcomes.tsv"
+  [ "$status" -eq 0 ] || { printf 'matrix candidate failed: %s (see %s)\n' "$model" "$evidence_dir" >&2; exit "$status"; }
+done
+
+python3 - "$evidence_dir" "${models[@]}" <<'PY'
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1]); models=sys.argv[2:]
+json.dump({'schema':'claude-shim-matrix/v1','evidence_dir':str(root),'models':models}, open(root/'manifest.json','w'), indent=2)
+PY
+printf 'CLAUDE_SHIM_MATRIX evidence_dir=%s\n' "$evidence_dir"

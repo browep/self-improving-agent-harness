@@ -50,7 +50,8 @@ async function main() {
   };
   if (typeof input.anthropic_base_url === 'string' && input.anthropic_base_url) {
     // Explicit capture/routing only; caller controls this field, not ambient env.
-    options.env = { ANTHROPIC_BASE_URL: input.anthropic_base_url };
+    // Set it before QUERY so the SDK/Claude child receives the same base URL.
+    process.env.ANTHROPIC_BASE_URL = input.anthropic_base_url;
   }
   for await (const message of query({ prompt: input.prompt, options })) {
     if (message?.type === 'user') {
