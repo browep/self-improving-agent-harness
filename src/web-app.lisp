@@ -98,13 +98,6 @@ of registration order."
             ((string= name "claude-sdk") (make-claude-sdk-backend))
             (t (error "Backend must be synthetic, openrouter, codex, claude, or claude-sdk; got ~S." name)))))
 
-(defun web-html-escape (text)
-  (with-output-to-string (out)
-    (loop for character across (or text "") do
-      (write-string (case character
-                      (#\& "&amp;") (#\< "&lt;") (#\> "&gt;")
-                      (#\" "&quot;") (#\' "&#39;") (t (string character))) out))))
-
 (defun web-mark (element test-id)
   (setf (clog:attribute element "data-testid") test-id)
   element)
@@ -187,19 +180,6 @@ such values fall through to the Haiku default rather than erroring."
     select))
 
 
-(defun web-split-lines (text)
-  "Split TEXT into a list of lines on #\Newline, stripping trailing #\Return."
-  (let ((text (or text ""))
-        (lines '())
-        (start 0))
-    (loop for i from 0 below (length text)
-          for ch = (char text i)
-          when (char= ch #\Newline)
-            do (push (string-right-trim '(#\Return) (subseq text start i)) lines)
-               (setf start (1+ i)))
-    (push (string-right-trim '(#\Return) (subseq text start)) lines)
-    (nreverse lines)))
-
 (defun web-render-chat-message (chat-log event)
   "Render chat messages and tool lifecycle cards, including recovered malformed calls."
   (when (web-event-visible-in-chat-log-p event)
@@ -241,7 +221,10 @@ such values fall through to the Haiku default rather than erroring."
                       (progn
                         (setf (clog:attribute hidden-div "style") "display:none")
                         (setf (clog:inner-html toggle) (format nil "Show ~D more line~:P" hidden-count)))))))
-            (clog:create-div item :content (web-html-escape text))))
+            (if (and assistantp (web-markdown-text-p text))
+                (web-style (clog:create-div item :content (web-render-markdown text))
+                           "white-space:normal")
+                (clog:create-div item :content (web-html-escape text)))))
       item)))
 
 (defun web-render-context-line (chat-log session start-time)

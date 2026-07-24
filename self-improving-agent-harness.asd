@@ -19,6 +19,7 @@
                (:file "src/subagent")
                (:file "src/chat-session")
                (:file "src/web-session")
+               (:file "src/web-markdown")
                (:file "src/web-app")
                (:file "src/tooling/browser/playwright-bridge")
                (:file "src/tooling/browser/browser-tool")
@@ -53,6 +54,7 @@
                (:file "tests/resume")
                (:file "tests/subagent")
                (:file "tests/web-session")
+               (:file "tests/web-markdown")
                ;; Standalone CLOG web UI browser integration test
                ;; (issue #42). NOT invoked by RUN-TESTS: it needs a
                ;; live CLOG server + headless Chromium. Load and run
