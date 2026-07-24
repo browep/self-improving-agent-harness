@@ -18,7 +18,10 @@ async function readRequest() {
 }
 
 function contentBlocks(message) {
-  return Array.isArray(message?.message?.content) ? message.message.content : [];
+  const content = message?.message?.content;
+  if (content == null) return [];
+  if (!Array.isArray(content)) throw new Error('malformed SDK message content');
+  return content;
 }
 
 function nativeToolEvents(message, results) {
