@@ -149,10 +149,21 @@ expect_success 'backend=claude-sdk' \
       HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file \
       "$repo_root/bin/chat" --backend CLAUDE-SDK --model claude-sdk-fixture-model --prompt 'claude-sdk path'
 
+# claude-shim is the official TypeScript Agent SDK bridge. Wrapper parsing is
+# OAuth-route only and must not require an OpenRouter key.
+expect_success 'backend=claude-shim' \
+  env -u OPENROUTER_API_KEY HARNESS_CHAT_RUNNER="$runner" \
+      HARNESS_ENV_FILE=/nonexistent/chat-cli-no-env-file \
+      "$repo_root/bin/chat" --backend CLAUDE-SHIM --model claude-shim-fixture-model --prompt 'claude-shim path'
+case "$help_output" in
+  *'claude-shim'*) ;;
+  *) printf 'Test failed: help output missing claude-shim backend guidance\n' >&2; exit 1 ;;
+esac
+
 expect_error 2 'not supported' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
       "$repo_root/bin/chat" --backend openai --prompt x
-expect_error 2 'must be openrouter, synthetic, codex, claude, or claude-sdk' \
+expect_error 2 'must be openrouter, synthetic, codex, claude, claude-sdk, or claude-shim' \
   env OPENROUTER_API_KEY=test-key HARNESS_CHAT_RUNNER="$runner" \
       "$repo_root/bin/chat" --backend nope --prompt x
 expect_error 2 'only valid with --backend codex' \

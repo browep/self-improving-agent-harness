@@ -34,10 +34,12 @@ There is no automatic cross-provider fallback."
            (make-claude-backend))
           ((string= name "claude-sdk")
            (make-claude-sdk-backend))
+          ((string= name "claude-shim")
+           (make-claude-shim-backend))
           ((string= name "openai")
            (error "HARNESS_BACKEND=openai is not supported. OpenAI Platform API-key billing is out of scope; use HARNESS_BACKEND=codex for ChatGPT/Codex subscription usage (no OPENAI_API_KEY), or openrouter for OPENROUTER_API_KEY."))
           (t
-           (error "HARNESS_BACKEND must be openrouter, synthetic, codex, claude, or claude-sdk, got ~S. OpenAI Platform API-key billing is not available." raw))))))
+           (error "HARNESS_BACKEND must be openrouter, synthetic, codex, claude, claude-sdk, or claude-shim, got ~S. OpenAI Platform API-key billing is not available." raw))))))
 
 (defun backend-api-key-configured-p (backend)
   "True when BACKEND carries a non-empty runtime API key (never the key itself).
