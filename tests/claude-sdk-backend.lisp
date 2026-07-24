@@ -155,8 +155,10 @@ can assert on exactly what COMPLETE tried to send."
                   "payload aligns the observed SDK clear-thinking context-management setting")
     (ensure-equal '(:previous-message-id nil) (getf payload :diagnostics)
                   "payload carries the observed first-turn diagnostics field")
-    (ensure-equal '((:type "text" :text "be terse")) (getf payload :system)
-                  "payload lifts system text into Anthropic content blocks")
+    (ensure-equal (list (list :type "text" :text "You are a Claude agent, built on Anthropic's Claude Agent SDK.")
+                        (list :type "text" :text "be terse"))
+                  (getf payload :system)
+                  "payload always leads with the SDK identity block, then the harness system prompt")
     (ensure-equal '(("user" . ((:type "text" :text "hi")))
                     ("assistant" . ((:type "text" :text "hello")))
                     ("user" . ((:type "text" :text "again"))))
@@ -168,6 +170,26 @@ can assert on exactly what COMPLETE tried to send."
     (ensure-true (not (member :resume payload)) "payload carries no resume-style field")
     (ensure-true (not (member :metadata payload))
                  "payload omits metadata when CLAUDE_SDK_METADATA_USER_ID is absent"))
+
+  ;; ---- Admission gate (issue #73): even with NO harness system prompt, the
+  ;; payload must still carry the Agent SDK identity as a single leading system
+  ;; block, because the Anthropic edge 429s OAuth requests that lack it. ----
+  (let* ((payload (claude-sdk-request-payload
+                   (claude-sdk-test-request :messages (list (list :role "user" :content "hi")))
+                   (make-claude-sdk-backend)))
+         (json (claude-sdk-request-json payload))
+         (parsed (yason:parse json))
+         (system (self-improving-agent-harness::openrouter-list (gethash "system" parsed))))
+    (ensure-equal (list (list :type "text" :text "You are a Claude agent, built on Anthropic's Claude Agent SDK."))
+                  (getf payload :system)
+                  "payload carries the lone identity system block when no harness prompt is present")
+    (ensure-equal 1 (length system)
+                  "serialized system has exactly one block when no harness prompt is present")
+    (ensure-equal "text" (gethash "type" (first system))
+                  "serialized identity block is a text content block")
+    (ensure-equal "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+                  (gethash "text" (first system))
+                  "serialized system leads with the exact identity string the edge requires"))
 
   ;; ---- Optional metadata.user_id: the official Agent SDK sends a
   ;; metadata.user_id the direct backend historically omitted. An env seam
@@ -215,11 +237,13 @@ can assert on exactly what COMPLETE tried to send."
                   (getf serialized :input-schema)
                   "payload maps function parameters to Anthropic input_schema"))
 
-  ;; system is entirely absent (not merely blank) when the request has none.
+  ;; system always carries at least the SDK identity block, even when the
+  ;; request has no system turn (issue #73 OAuth admission gate).
   (let* ((payload (claude-sdk-request-payload (claude-sdk-test-request :content "no system here")
                                               (make-claude-sdk-backend))))
-    (ensure-true (not (member :system payload))
-                 "payload omits the system key entirely when no system turn is present"))
+    (ensure-equal (list (list :type "text" :text "You are a Claude agent, built on Anthropic's Claude Agent SDK."))
+                  (getf payload :system)
+                  "payload always includes the SDK identity system block, even with no harness system turn"))
 
   ;; max_tokens: request options win over a backend-level override, which
   ;; wins over the global default.
@@ -256,8 +280,14 @@ can assert on exactly what COMPLETE tried to send."
     (ensure-equal *claude-sdk-default-max-tokens* (gethash "max_tokens" parsed)
                   "wire JSON uses snake_case max_tokens")
     (ensure-equal t (gethash "stream" parsed) "wire JSON stream is boolean true")
-    (ensure-equal "sys" (gethash "text" (first (coerce (gethash "system" parsed) 'list)))
-                  "wire JSON system text round-trips through a content block")
+    (let ((system (coerce (gethash "system" parsed) 'list)))
+      (ensure-equal 2 (length system)
+                    "wire JSON system carries the identity block then the harness prompt")
+      (ensure-equal "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+                    (gethash "text" (first system))
+                    "wire JSON system leads with the Agent SDK identity block")
+      (ensure-equal "sys" (gethash "text" (second system))
+                    "wire JSON harness system text round-trips as the second content block"))
     (ensure-true (not (search (string #\Bel)
                               (gethash "text" (first (coerce (gethash "content"
                                                                 (first (coerce (gethash "messages" parsed) 'list)))
