@@ -278,6 +278,42 @@ still going"
       (ensure-true (search "finish_reason=length" (getf nudge :content))
                    "empty-length nudge mentions finish_reason=length")))
 
+  ;; Anthropic's Messages API uses max_tokens rather than OpenAI's length for
+  ;; the same exhausted-output condition. It must receive the identical recovery.
+  (let* ((empty-max-tokens
+           (make-completion-response
+            :text ""
+            :model "claude-sonnet-5"
+            :finish-reason "max_tokens"
+            :tool-calls '()))
+         (recovered
+           (make-completion-response
+            :text "recovered-after-empty-max-tokens"
+            :model "claude-sonnet-5"
+            :finish-reason "end_turn"
+            :tool-calls '()))
+         (backend (make-instance 'scripted-backend
+                                 :name "scripted"
+                                 :responses (list empty-max-tokens recovered)))
+         (result
+           (self-improving-agent-harness:run-tool-loop
+            backend
+            (make-completion-request
+             :model "claude-sonnet-5"
+             :messages '((:role "user" :content "continue")))
+            '())))
+    (ensure-equal "recovered-after-empty-max-tokens" (completion-response-text result)
+                  "empty Anthropic finish_reason=max_tokens auto-continues once")
+    (ensure-equal 2 (length (scripted-backend-received-requests backend))
+                  "empty max_tokens recovery records the original request plus one continuation")
+    (let* ((continuation (first (scripted-backend-received-requests backend)))
+           (messages (completion-request-messages continuation))
+           (nudge (car (last messages))))
+      (ensure-equal "user" (getf nudge :role)
+                    "empty max_tokens recovery appends a user nudge")
+      (ensure-true (search "finish_reason=max_tokens" (getf nudge :content))
+                   "empty max_tokens nudge names Anthropic's terminal reason")))
+
   (let* ((empty-length
            (make-completion-response
             :text ""

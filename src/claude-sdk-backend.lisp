@@ -98,11 +98,11 @@ honest string the Agent SDK itself sends, not the Claude Code CLI's identity.")
 (defparameter *claude-sdk-x-app* "cli"
   "Captured `x-app` header value.")
 
-(defparameter *claude-sdk-default-max-tokens* 4096
+(defparameter *claude-sdk-default-max-tokens* 16384
   "Default Anthropic Messages `max_tokens` when neither the completion request's
 OPTIONS nor the backend supply one. The Messages API requires this field; this
-harness never guesses a value large enough to matter, only a conservative
-floor so a plain request does not 400 for a missing required field.")
+harness uses the same long-turn budget as interactive chat so a direct request
+does not silently receive a substantially smaller output allowance.")
 
 (defparameter *claude-sdk-request-timeout-seconds* 120
   "Wall-clock timeout in seconds for one Anthropic Messages API completion

@@ -41,11 +41,11 @@ delivered without waiting for a human line.")
 (defun reload-tool (arguments)
   (reload-harness-tool arguments))
 
-(defparameter *chat-max-tokens* 8192
+(defparameter *chat-max-tokens* 16384
   "Default max_tokens for interactive chat completions.
 
-Raised above the historical 4096 default so long tool-using turns (especially
-file writes) are less likely to end with finish_reason=length mid-command.
+Raised above the historical 8192 default so long tool-using turns (especially
+file writes) are less likely to exhaust their output budget mid-command.
 Bound or set at runtime; CHAT-OPTIONS re-reads it each turn via the symbol
 designator path.")
 

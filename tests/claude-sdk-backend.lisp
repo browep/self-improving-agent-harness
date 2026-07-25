@@ -149,6 +149,8 @@ can assert on exactly what COMPLETE tried to send."
                   "payload forwards the requested model verbatim")
     (ensure-equal *claude-sdk-default-max-tokens* (getf payload :max-tokens)
                   "payload defaults max_tokens when the request has none")
+    (ensure-equal 16384 *claude-sdk-default-max-tokens*
+                  "direct Claude SDK requests default to 16384 max_tokens")
     (ensure-equal t (getf payload :stream) "payload always requests stream:true")
     (ensure-equal '(:edits ((:type "clear_thinking_20251015" :keep "all")))
                   (getf payload :context-management)

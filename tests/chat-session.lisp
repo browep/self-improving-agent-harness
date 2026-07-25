@@ -107,8 +107,8 @@
                   "chat-options keeps a low default temperature")
     (ensure-true (integerp (getf options :max-tokens))
                  "chat-options supplies max-tokens")
-    (ensure-true (>= (getf options :max-tokens) 8192)
-                 "chat-options default max-tokens is at least 8192")
+    (ensure-equal 16384 (getf options :max-tokens)
+                  "chat-options defaults to 16384 max-tokens for long tool-using turns")
     (ensure-equal "auto" (getf options :tool-choice)
                   "chat-options sets tool_choice auto explicitly")
     (ensure-true (search "native tools/tool_calls"

@@ -205,17 +205,19 @@ usable text is present so callers never see NIL content."
            (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) text))))))
 
 (defun truncated-empty-final-response-p (response)
-  "True when RESPONSE ended the tool loop with finish_reason=length and no text.
+  "True when RESPONSE exhausted output tokens and no visible text was returned.
 
 Observed with reasoning-heavy models (e.g. GLM via Synthetic): a large HTTP body
 can still normalize to empty message.content when the model exhausts max_tokens
 on hidden/reasoning tokens. Treating that as a successful final answer makes the
-chat look dead (blank stdout + <<< DONE)."
+chat look dead (blank stdout + <<< DONE). OpenAI-compatible providers report
+`length`; Anthropic Messages reports `max_tokens`."
   (and response
        (let ((calls (completion-response-tool-calls response)))
          (or (null calls) (zerop (length calls))))
        (let ((reason (completion-response-finish-reason response)))
-         (and (stringp reason) (string-equal reason "length")))
+         (and (stringp reason)
+              (member reason '("length" "max_tokens") :test #'string-equal)))
        (empty-completion-text-p (completion-response-text response))))
 
 (defparameter *tool-loop-length-retry-limit* 1
@@ -224,9 +226,11 @@ final response before synthesizing a visible diagnostic answer.
 
 0 disables auto-continue (still synthesizes a diagnostic). Bound or set at runtime.")
 
-(defparameter +truncated-empty-final-nudge+
-  "HARNESS: Your previous completion hit finish_reason=length with empty message content (no tool calls and no user-visible text). This usually means max_tokens was consumed by reasoning or an unfinished answer. Continue from the current task and produce either a concise final answer or a smaller native tool call. Do not repeat large tool outputs."
-  "User message injected to recover from an empty truncated final response.")
+(defun truncated-empty-final-nudge (response)
+  "Return a recovery instruction naming RESPONSE's provider terminal reason."
+  (format nil
+          "HARNESS: Your previous completion hit finish_reason=~A with empty message content (no tool calls and no user-visible text). This usually means max_tokens was consumed by reasoning or an unfinished answer. Continue from the current task and produce either a concise final answer or a smaller native tool call. Do not repeat large tool outputs."
+          (or (completion-response-finish-reason response) "unknown")))
 
 (defun synthesize-truncated-empty-final-response (response)
   "Return RESPONSE rewritten with a visible diagnostic final text.
@@ -234,10 +238,11 @@ final response before synthesizing a visible diagnostic answer.
 Preserves model/raw/usage/finish-reason so accounting and logs stay accurate."
   (make-completion-response
    :text (format nil
-                 "[harness] Model returned finish_reason=length with empty content ~
+                 "[harness] Model returned finish_reason=~A with empty content ~
 (no tool calls). The turn produced no user-visible answer—often because ~
 max_tokens was exhausted by reasoning or a truncated draft. Retry with a ~
-smaller next step, raise max_tokens, or continue the task explicitly.")
+smaller next step, raise max_tokens, or continue the task explicitly."
+                 (or (completion-response-finish-reason response) "unknown"))
    :model (completion-response-model response)
    :raw (completion-response-raw response)
    :tool-calls (completion-response-tool-calls response)
@@ -951,7 +956,7 @@ visible even when the process is later killed."
                                                        :content
                                                        (or (completion-response-text response) ""))
                                                  (list :role "user"
-                                                       :content +truncated-empty-final-nudge+))))
+                                                       :content (truncated-empty-final-nudge response)))))
                                  (next-request
                                    (make-completion-request
                                     :model (completion-request-model current-request)
