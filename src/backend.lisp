@@ -867,12 +867,13 @@ visible even when the process is later killed."
                                  (getf tool :name)
                                  "tool"))
                            tools))))
-             (log-provider-request (current-request round)
+             (log-provider-request (current-request round attempt-id)
                (let* ((messages (completion-request-messages current-request))
                       (names (tool-names-from-options
                               (completion-request-options current-request))))
                  (log-interaction :info "provider-request"
                                   :round round
+                                  :attempt-id attempt-id
                                   :model (completion-request-model current-request)
                                   :message-count (length messages)
                                   :tool-names (mapcar #'princ-to-string (or names '()))
@@ -880,11 +881,13 @@ visible even when the process is later killed."
                                   (or *openrouter-request-timeout-seconds* 0))
                  (emit-observer "provider-round-started"
                                 :round round
+                                :attempt-id attempt-id
                                 :model (completion-request-model current-request))))
-             (log-provider-response (current-request round response duration-seconds)
+             (log-provider-response (current-request round attempt-id response duration-seconds)
                (let ((tool-calls (completion-response-tool-calls response)))
                  (log-interaction :info "provider-response"
                                   :round round
+                                  :attempt-id attempt-id
                                   :model (or (completion-response-model response)
                                              (completion-request-model current-request))
                                   :finish-reason (or (completion-response-finish-reason response)
@@ -902,18 +905,22 @@ visible even when the process is later killed."
                                     :round round))
                  (emit-observer "provider-round-completed"
                                 :round round
+                                :attempt-id attempt-id
                                 :model (or (completion-response-model response)
                                            (completion-request-model current-request))
                                 :finish-reason (or (completion-response-finish-reason response)
                                                    "unknown"))))
              (run-next-round (current-request round responses length-retries)
-               (log-provider-request current-request round)
-               (let ((start (get-internal-real-time)))
+               ;; Provider-generated request IDs may be absent on a failure;
+               ;; create our own stable ID before any transport work begins.
+               (let ((attempt-id (uuid-v4-string)))
+                 (log-provider-request current-request round attempt-id)
+                 (let ((start (get-internal-real-time)))
                  (handler-case
                      (let* ((*provider-round* round)
                             (response (maybe-recover-text-embedded-tool-calls
                                        (complete backend current-request))))
-                       (log-provider-response current-request round response
+                       (log-provider-response current-request round attempt-id response
                                               (elapsed-seconds-since start))
                        ;; Claude Code may execute MCP tools inside its child process.
                        ;; These are display/audit events only: never route them through
@@ -1021,6 +1028,7 @@ visible even when the process is later killed."
                            (class (classify-chat-turn-error condition)))
                        (log-interaction :error "provider-request-failed"
                                         :round round
+                                        :attempt-id attempt-id
                                         :model (completion-request-model current-request)
                                         :duration-seconds duration
                                         :terminal-error-class class
@@ -1033,10 +1041,11 @@ visible even when the process is later killed."
                        (ignore-errors
                          (emit-observer "provider-round-failed"
                                         :round round
+                                        :attempt-id attempt-id
                                         :model (completion-request-model current-request)
                                         :duration-seconds duration
                                         :terminal-error-class class)))
-                     (error condition))))))
+                     (error condition)))))))
       (run-next-round request 0 '() 0))))
 
 (defun openrouter-log-url (url)

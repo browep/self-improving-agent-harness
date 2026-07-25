@@ -323,7 +323,8 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
           ((and (member key '(:duration-seconds :timeout-seconds) :test #'eq)
                 (numberp value))
            (list key value))
-          ((and (eq key :tool-names) (listp value)
+          ((and (member key '(:tool-names :provider-attempt-ids) :test #'eq)
+                (listp value)
                 (every #'stringp value))
            (list key value))
           ((and *interaction-log-record-content*

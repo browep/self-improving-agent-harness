@@ -55,11 +55,10 @@ volume. Override with `HARNESS_LOG_DIR` when tests need an isolated temp dir.
 
 Each line is an object with Claude-like envelope fields (`type`, `uuid`,
 `parentUuid`, `sessionId`, `timestamp`, `isSidechain`) plus a harness `payload`
-that carries only allow-listed metadata: lifecycle event name, compact
-model/mode/tool/reason labels, and numeric bounds or exit-status metadata.
-Prompts, assistant text, tool commands/results, and arbitrary failure details
-are excluded because they can contain credentials or private repository data. A
-nonzero `run_shell` command is still returned to the model as a tool result with
+that carries allow-listed lifecycle metadata. Prompts, assistant text, tool
+commands/results, and arbitrary failure details are excluded by default; the
+explicit `turn-summary.userPrompt` session-diagnostics exception retains the raw
+user prompt as documented below. A nonzero `run_shell` command is still returned to the model as a tool result with
 its exit status and combined output, so the model can explain or correct it
 without aborting the turn. `run_shell` defaults to a 60-second wall-clock
 timeout (optional `timeout` argument); timed-out commands are terminated and
@@ -86,21 +85,28 @@ stdout contains raw final assistant bytes: no startup prose, prompt, `OUTCOME`,
 or human failure text is emitted. Each event has `event` and `session_id`;
 submitted input is numbered from one and includes `turn`. The lifecycle and turn
 event values are `session-started`, `session-exited`, `turn-submitted`,
-`turn-completed`, `turn-failed`, and `turn-empty`. `session-exited.reason`
-distinguishes `local-exit`, `eof`, and `interrupted`. Empty input emits
-`turn-empty` and makes no provider request; a failed turn emits `turn-failed`,
-retains the previous conversation history, and leaves the interactive session
-running. Final assistant text remains stdout-only. Every supervised
-`turn-completed` event additionally carries a required nonnegative integer
+`turn-completed`, `turn-failed`, `turn-empty`, and `turn-summary`.
+`session-exited.reason` distinguishes `local-exit`, `eof`, and `interrupted`.
+Empty input emits `turn-empty` and makes no provider request. A failed turn emits
+`turn-failed`, preserves the failed user prompt plus a sanitized assistant marker
+in durable/replay history, and leaves the interactive session running. Every
+terminal turn also emits `turn-summary`, including history persistence and
+provider request/response/failure counts, `terminalErrorClass`, raw `userPrompt`,
+and ordered `providerAttemptIds`. Each provider round emits
+`provider-request` followed by `provider-response` or `provider-request-failed`;
+all three event types join by the harness-owned UUID `attemptId`. Final assistant
+text remains stdout-only. Every supervised `turn-completed` event additionally
+carries a required nonnegative integer
 `assistant_bytes`: the exact UTF-8 byte length of that turn's raw stdout text.
 It is a framing invariant, not an estimate or character count.
 
 Each append-only `agent-logs/$ISO-TIMESTAMP.jsonl` file is diagnostic data for
 one chat process, shaped like a Claude Code session transcript envelope. Records
-include `sessionId` / `turn` context plus only allow-listed metadata inside
-`payload`. They exclude credentials, prompts, assistant text, commands, tool
-results, and arbitrary failure details. There is no shared multi-session
-`chat.log`.
+include `sessionId` / `turn` context plus allow-listed metadata inside `payload`.
+They exclude credentials, assistant text, commands, tool results, and arbitrary
+failure details. `turn-summary.userPrompt` is the explicit user-approved
+exception: it carries the raw user prompt for session diagnosis. There is no shared
+multi-session `chat.log`.
 
 ## Supervised JSONL slice
 
@@ -152,6 +158,27 @@ prints final assistant content. Interactive sessions also accept `/reload` and
 `/max-rounds [N]` without a provider round-trip. It does not provide streaming/SSE,
 persistent transcripts, or a policy/sandbox layer. `make repl`
 remains the raw Docker SBCL REPL; it is not the model-chat interface.
+
+## Available chat tools
+
+`bin/chat` and the Web UI expose the following native tool-call API to supported
+backends. Tools are resolved afresh on each call, so `reload_harness` can update
+Lisp implementations in an already-running chat.
+
+| Tool | Purpose |
+| --- | --- |
+| `run_shell` | Run a bounded `/bin/sh -lc` command in the harness container; optional `timeout` defaults to 60 seconds. |
+| `web_search` | Search current web information through Tavily; requires `TAVILY_API_KEY`. |
+| `reload_harness` | Reload harness Lisp sources into the current image without clearing chat history. |
+| `run_subagent` | Start one independent, non-nesting subagent with optional provider/model/round/timeout overrides. |
+| `browser_open`, `browser_click`, `browser_type`, `browser_get_text` | Open and interact with a persistent Playwright browser page. |
+| `browser_eval`, `browser_assert` | Evaluate or assert JavaScript in that page. |
+| `browser_screenshot`, `browser_video`, `browser_close` | Save visual evidence/video or release the browser bridge. |
+
+All tools must be invoked through native provider `tool_calls`, never through
+XML/text markup in assistant content. Tool availability is backend- and
+runtime-dependent: `claude-sdk` is the deployed Web UI backend; a required key
+or browser runtime must be configured before the relevant tool can succeed.
 
 ## Cross-process resume (`bin/chat -c`)
 

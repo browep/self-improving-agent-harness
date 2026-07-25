@@ -139,6 +139,7 @@ to avoid inflating the count."
                                    history-message-count-after history-persisted
                                    provider-request-count provider-response-count
                                    provider-failure-count tool-call-count
+                                   provider-attempt-ids
                                    last-finish-reason terminal-error-class)
   "Emit one machine-readable per-turn summary (#91).
 
@@ -160,6 +161,7 @@ history' case readable from a single record."
                       :provider-response-count provider-response-count
                       :provider-failure-count provider-failure-count
                       :tool-call-count tool-call-count
+                      :provider-attempt-ids provider-attempt-ids
                       :last-finish-reason last-finish-reason
                       :terminal-error-class terminal-error-class)))
     ;; Diagnostics must never change turn behavior: guard both the durable log
@@ -215,6 +217,8 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
            (provider-response-count 0)
            (provider-failure-count 0)
            (observed-tool-call-count 0)
+           ;; In start-event order; included in terminal turn-summary (#92).
+           (provider-attempt-ids '())
            (last-finish-reason nil)
            (last-error-class nil)
            (wrapped-observer
@@ -225,7 +229,9 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                (ignore-errors
                  (cond
                    ((string= kind "provider-round-started")
-                    (incf provider-request-count))
+                    (incf provider-request-count)
+                    (let ((attempt-id (getf fields :attempt-id)))
+                      (when attempt-id (push attempt-id provider-attempt-ids))))
                    ((string= kind "provider-round-completed")
                     (incf provider-response-count)
                     (let ((fr (getf fields :finish-reason)))
@@ -292,6 +298,7 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                    :provider-response-count provider-response-count
                    :provider-failure-count provider-failure-count
                    :tool-call-count (provider-responses-tool-call-count provider-responses)
+                   :provider-attempt-ids (nreverse provider-attempt-ids)
                    :last-finish-reason (or (completion-response-finish-reason response)
                                            last-finish-reason "unknown")
                    :terminal-error-class "none"))
@@ -348,6 +355,7 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                :provider-response-count provider-response-count
                :provider-failure-count provider-failure-count
                :tool-call-count observed-tool-call-count
+               :provider-attempt-ids (nreverse provider-attempt-ids)
                :last-finish-reason (or last-finish-reason "none")
                :terminal-error-class (or last-error-class error-class)))
             (error condition)))))))

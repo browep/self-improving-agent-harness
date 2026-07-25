@@ -145,6 +145,16 @@ It does not change the redaction policy for provider captures, supervisor
 protocols, transport logs, credentials, or raw provider errors. The terminal
 summary retains an error *class*, not raw provider error text.
 
+### Provider-attempt correlation
+
+Every provider round gets a harness-owned UUID `attemptId` before transport
+begins. The same ID is present on `provider-request`, `provider-response`, or
+`provider-request-failed`, and on the corresponding Web UI observer event
+(`provider-round-started`, `provider-round-completed`, or
+`provider-round-failed`). `turn-summary.providerAttemptIds` lists those IDs in
+round order. Join on these fields instead of event chronology, including when
+several sessions or provider retries interleave in the same log stream.
+
 ## Common failure modes
 
 ### 1. Provider timeout → failed turn dropped from durable history (apparent "forgetting")
