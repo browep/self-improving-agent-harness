@@ -24,9 +24,13 @@
     (web-session-submit session "hello from browser")
     (ensure-equal '("session-started" "user-message" "assistant-pending"
                     "provider-round-started" "provider-round-completed"
-                    "assistant-message" "turn-completed")
+                    "turn-summary" "assistant-message" "turn-completed")
                   (mapcar #'web-event-kind (web-session-events session))
-                  "a browser turn emits the visible provider-to-final-message sequence")
+                  "a browser turn includes the durable turn summary before final rendering")
+    (let ((summary (find "turn-summary" (web-session-events session)
+                         :key #'web-event-kind :test #'string=)))
+      (ensure-equal "completed" (getf summary :status)
+                    "browser timeline receives the completed turn-summary status"))
     (ensure-equal "browser answer"
                   (getf (car (last (web-session-events session))) :text)
                   "the completed browser event contains the final assistant text")
@@ -58,9 +62,9 @@
                     "provider-round-started" "provider-round-completed"
                     "tool-call-started" "tool-call-completed"
                     "provider-round-started" "provider-round-completed"
-                    "assistant-message" "turn-completed")
+                    "turn-summary" "assistant-message" "turn-completed")
                   (mapcar #'web-event-kind (web-session-events session))
-                  "a browser tool turn exposes each provider and matching tool event in order")
+                  "a browser tool turn exposes provider/tool events then its terminal summary")
     (let ((tool-result (find "tool-call-completed" (web-session-events session)
                              :key #'web-event-kind :test #'string=)))
       (ensure-equal "web-call-1" (getf tool-result :tool-call-id)
@@ -90,9 +94,9 @@
     (ensure-equal '("session-started" "user-message" "assistant-pending"
                     "provider-round-started" "provider-round-completed"
                     "tool-call-started" "tool-call-completed"
-                    "assistant-message" "turn-completed")
+                    "turn-summary" "assistant-message" "turn-completed")
                   (mapcar #'web-event-kind (web-session-events session))
-                  "Claude native events use the same CLOG tool-card lifecycle as Synthetic")
+                  "Claude native events use the CLOG lifecycle plus a terminal summary")
     (ensure-equal 0 handler-calls
                   "replayed native Claude events never dispatch a second local handler call")
     (let ((started (find "tool-call-started" (web-session-events session)

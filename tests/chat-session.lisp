@@ -102,6 +102,151 @@
     (note-chat-session-failure session)
     (ensure-true (chat-session-failed-turn-p session)
                  "a failed interactive turn is recorded without exposing error detail"))
+  ;; Error classification (#92, classification half). Deterministic string map;
+  ;; unknown falls back rather than guessing.
+  (flet ((classifies (input expected)
+           (ensure-equal expected
+                         (self-improving-agent-harness::classify-chat-turn-error input)
+                         (format nil "classify ~S -> ~A" input expected))))
+    (classifies "OpenRouter request timed out after 120 seconds." "provider-timeout")
+    (classifies "finish_reason=max_tokens with empty content" "empty-max-tokens")
+    (classifies "HTTP 429 Too Many Requests: rate limit exceeded" "rate-limit")
+    (classifies "401 Unauthorized: invalid api key" "auth-error")
+    (classifies "connection reset by peer" "transport-error")
+    (classifies "tool execution failed" "tool-error")
+    (classifies "some unexpected explosion" "unknown-provider-error"))
+  ;; #91 success path: exactly one turn-summary with accurate counts and
+  ;; history persistence, emitted to the observer and the durable JSONL.
+  (let* ((directory #P"/tmp/self-improving-agent-harness-turn-summary-ok/")
+         (session-id "2026-02-02T00:00:00.020Z")
+         (events '())
+         (response (make-completion-response :text "done" :model "test/model"
+                                             :finish-reason "end_turn"))
+         (backend (make-instance 'scripted-backend :name "scripted"
+                                 :responses (list response)))
+         (session (make-chat-session :backend backend :model "test/model" :handlers '())))
+    (when (probe-file directory)
+      (uiop:delete-directory-tree directory :validate t))
+    (unwind-protect
+         (progn
+           (ensure-true
+            (self-improving-agent-harness::configure-interaction-logging
+             directory :session-id session-id)
+            "interaction logging is configured (durable JSONL assertions are meaningful)")
+           (chat-session-turn session "hello"
+                              :observer (lambda (kind &rest fields)
+                                          (push (cons kind fields) events)))
+           (let ((summaries (remove "turn-summary" events
+                                    :key #'car :test (complement #'string=))))
+             (ensure-equal 1 (length summaries)
+                           "a completed turn emits exactly one turn-summary to the observer")
+             (let ((f (cdr (first summaries))))
+               (ensure-equal "completed" (getf f :status)
+                             "success summary status is completed")
+               (ensure-equal 2 (getf f :submitted-message-count)
+                             "success summary counts system+user submitted messages")
+               (ensure-equal 1 (getf f :history-message-count-before)
+                             "success summary records pre-turn history count")
+               (ensure-equal 3 (getf f :history-message-count-after)
+                             "success summary records post-turn history count")
+               (ensure-true (getf f :history-persisted)
+                            "success summary reports durable persistence when logging is on")
+               (ensure-equal 1 (getf f :provider-request-count)
+                             "success summary counts one provider request")
+               (ensure-equal 1 (getf f :provider-response-count)
+                             "success summary counts one provider response")
+               (ensure-equal 0 (getf f :provider-failure-count)
+                             "success summary counts zero provider failures")
+               (ensure-equal 0 (getf f :tool-call-count)
+                             "success summary counts zero tool calls for a text answer")
+               (ensure-equal "end_turn" (getf f :last-finish-reason)
+                             "success summary carries the provider finish reason")
+               (ensure-equal "none" (getf f :terminal-error-class)
+                             "success summary has no error class")))
+           (let ((jc (uiop:read-file-string
+                      (logging-test-session-path directory session-id))))
+             (ensure-true (search "\"event\":\"turn-summary\"" jc)
+                          "turn-summary is durable in JSONL")
+             (ensure-true (search "\"status\":\"completed\"" jc)
+                          "durable turn-summary records completed status")
+             (ensure-true (search "\"historyPersisted\":true" jc)
+                          "durable turn-summary records historyPersisted (camelCase)")
+             (ensure-true (search "\"terminalErrorClass\":\"none\"" jc)
+                          "durable turn-summary records terminalErrorClass none")))
+      (self-improving-agent-harness::configure-interaction-logging nil)
+      (when (probe-file directory)
+        (uiop:delete-directory-tree directory :validate t))))
+  ;; #91/#92 failure path: a provider timeout still emits one turn-summary with
+  ;; a classified error, correct counts, and the preserved failed turn.
+  (let* ((directory #P"/tmp/self-improving-agent-harness-turn-summary-fail/")
+         (session-id "2026-02-02T00:00:00.021Z")
+         (events '())
+         (backend (make-instance 'erroring-backend :name "erroring"
+                                 :message "OpenRouter request timed out after 120 seconds."))
+         (session (make-chat-session :backend backend :model "test/model" :handlers '())))
+    (when (probe-file directory)
+      (uiop:delete-directory-tree directory :validate t))
+    (unwind-protect
+         (progn
+           (ensure-true
+            (self-improving-agent-harness::configure-interaction-logging
+             directory :session-id session-id)
+            "interaction logging is configured for the failure-path test")
+           (handler-case
+               (chat-session-turn session "Fix the issue"
+                                  :observer (lambda (kind &rest fields)
+                                              (push (cons kind fields) events)))
+             (error () nil))
+           ;; The failed turn is still preserved (from the earlier fix).
+           (ensure-equal '("system" "user" "assistant")
+                         (mapcar #'message-role (chat-session-history session))
+                         "failed turn still preserves prompt + marker with summary added")
+           (let ((summaries (remove "turn-summary" events
+                                    :key #'car :test (complement #'string=))))
+             (ensure-equal 1 (length summaries)
+                           "a failed turn emits exactly one turn-summary to the observer")
+             (let ((f (cdr (first summaries))))
+               (ensure-equal "failed" (getf f :status)
+                             "failure summary status is failed")
+               (ensure-equal "provider-timeout" (getf f :terminal-error-class)
+                             "failure summary classifies the provider timeout")
+               (ensure-equal 1 (getf f :provider-request-count)
+                             "failure summary counts the one attempted request")
+               (ensure-equal 0 (getf f :provider-response-count)
+                             "failure summary counts zero successful responses")
+               (ensure-equal 1 (getf f :provider-failure-count)
+                             "failure summary counts one provider failure")
+               (ensure-equal 0 (getf f :tool-call-count)
+                             "failure summary counts zero tool calls")
+               (ensure-equal 1 (getf f :history-message-count-before)
+                             "failure summary records pre-turn history count")
+               (ensure-equal 3 (getf f :history-message-count-after)
+                             "failure summary records preserved post-turn history count")
+               (ensure-true (getf f :history-persisted)
+                            "failure summary reports the preserved turn was persisted")))
+           (let* ((jc (uiop:read-file-string
+                       (logging-test-session-path directory session-id)))
+                  (summary-line
+                    (find-if (lambda (line) (search "\"event\":\"turn-summary\"" line))
+                             (uiop:split-string jc :separator '(#\Newline)))))
+             (ensure-true (search "\"event\":\"provider-request-failed\"" jc)
+                          "provider-request-failed is durable in JSONL")
+             (ensure-true (search "\"terminalErrorClass\":\"provider-timeout\"" jc)
+                          "provider-request-failed carries the classified error (camelCase)")
+             (ensure-true summary-line
+                          "failed turn's turn-summary is durable in JSONL")
+             (ensure-true (search "\"status\":\"failed\"" summary-line)
+                          "durable turn-summary records failed status")
+             ;; The summary line carries the class only -- never the raw error
+             ;; text (which legitimately appears in provider-request-failed) and
+             ;; never the user prompt.
+             (ensure-true (not (search "120 seconds" summary-line))
+                          "turn-summary carries the class only, never raw error text")
+             (ensure-true (not (search "Fix the issue" summary-line))
+                          "turn-summary never carries the raw user prompt")))
+      (self-improving-agent-harness::configure-interaction-logging nil)
+      (when (probe-file directory)
+        (uiop:delete-directory-tree directory :validate t))))
   ;; Regression for the 2026-07-25T16:33:08.866Z "apparent forgetting" session:
   ;; a failed turn must PRESERVE the failed user prompt plus a sanitized
   ;; assistant failure marker in history (and in the durable snapshot), so a

@@ -119,6 +119,53 @@ container restart, not only the in-memory session."
        (and (typep (chat-session-backend session) 'claude-backend)
             (claude-backend-session-id (chat-session-backend session)))))))
 
+(defun provider-responses-tool-call-count (provider-responses)
+  "Total provider-requested tool calls across PROVIDER-RESPONSES.
+
+Counts only COMPLETION-RESPONSE-TOOL-CALLS (the model's own tool_calls array).
+Native/MCP tool events emitted by a child process are display/audit signals and
+may arrive as start/completion pairs, so they are deliberately not summed here
+to avoid inflating the count."
+  (reduce #'+ provider-responses
+          :key (lambda (r)
+                 (if (and r (typep r 'completion-response))
+                     (length (completion-response-tool-calls r))
+                     0))
+          :initial-value 0))
+
+(defun log-chat-turn-summary (&key observer status model submitted-message-count
+                                   history-message-count-before
+                                   history-message-count-after history-persisted
+                                   provider-request-count provider-response-count
+                                   provider-failure-count tool-call-count
+                                   last-finish-reason terminal-error-class)
+  "Emit one machine-readable per-turn summary (#91).
+
+Written to the durable JSONL interaction log (consumed by bin/session-diagnose,
+#93) and forwarded to OBSERVER when supplied (web UI / tests). Carries counts
+and a classified TERMINAL-ERROR-CLASS only -- never raw error text or prompt
+content. HISTORY-MESSAGE-COUNT-BEFORE/AFTER and HISTORY-PERSISTED are the fields
+that make the 2026-07-25T16:33:08.866Z 'failed turn dropped from durable
+history' case readable from a single record."
+  (let ((fields (list :initiator *interaction-turn-initiator*
+                      :status status
+                      :model model
+                      :submitted-message-count submitted-message-count
+                      :history-message-count-before history-message-count-before
+                      :history-message-count-after history-message-count-after
+                      :history-persisted history-persisted
+                      :provider-request-count provider-request-count
+                      :provider-response-count provider-response-count
+                      :provider-failure-count provider-failure-count
+                      :tool-call-count tool-call-count
+                      :last-finish-reason last-finish-reason
+                      :terminal-error-class terminal-error-class)))
+    ;; Diagnostics must never change turn behavior: guard both the durable log
+    ;; and the observer emit so neither can mask or alter the turn outcome.
+    (ignore-errors (apply #'log-interaction :info "turn-summary" fields))
+    (when observer
+      (ignore-errors (apply observer "turn-summary" fields)))))
+
 (defun chat-session-turn (session content &key observer)
   "Run one non-empty user turn and append its complete exchange to SESSION.
 
@@ -143,7 +190,8 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
     (log-interaction :info "turn-received"
                      :initiator *interaction-turn-initiator*
                      :content content)
-    (let* ((messages (append (chat-session-history session)
+    (let* ((history-count-before (length (chat-session-history session)))
+           (messages (append (chat-session-history session)
                              (list (list :role "user" :content content))))
            (options (resolve-chat-session-options session))
            (handlers (resolve-chat-session-handlers session))
@@ -154,7 +202,41 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
            (request (make-completion-request
                      :model (chat-session-model session)
                      :messages messages
-                     :options options)))
+                     :options options))
+           ;; Turn-summary counters (#91) fed by a transparent observer wrapper.
+           ;; PROVIDER-REQUEST-COUNT counts started + failed rounds; a failed
+           ;; round was still a request. TOOL calls counted here are only the
+           ;; observer-visible (native/provider) ones and are used for the
+           ;; FAILED path (partial by definition); the SUCCESS path recomputes
+           ;; the complete tool-call count from PROVIDER-RESPONSES instead.
+           (provider-request-count 0)
+           (provider-response-count 0)
+           (provider-failure-count 0)
+           (observed-tool-call-count 0)
+           (last-finish-reason nil)
+           (last-error-class nil)
+           (wrapped-observer
+             (lambda (kind &rest fields)
+               ;; Counting must never change turn behavior: guard the tally,
+               ;; then forward the original observer call unchanged so its
+               ;; error semantics (if any) are preserved.
+               (ignore-errors
+                 (cond
+                   ((string= kind "provider-round-started")
+                    (incf provider-request-count))
+                   ((string= kind "provider-round-completed")
+                    (incf provider-response-count)
+                    (let ((fr (getf fields :finish-reason)))
+                      (when fr (setf last-finish-reason fr))))
+                   ((string= kind "provider-round-failed")
+                    ;; "provider-round-started" already counted this request;
+                    ;; do NOT increment provider-request-count again here.
+                    (incf provider-failure-count)
+                    (let ((cls (getf fields :terminal-error-class)))
+                      (when cls (setf last-error-class cls))))
+                   ((string= kind "tool-call-started")
+                    (incf observed-tool-call-count))))
+               (when observer (apply observer kind fields)))))
       (log-interaction :info "turn-submitted"
                        :initiator *interaction-turn-initiator*
                        :model (chat-session-model session)
@@ -173,7 +255,7 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                                  request
                                  handlers
                                  :max-rounds (chat-session-max-rounds session)
-                                 :observer observer)
+                                 :observer wrapped-observer)
                 (setf (chat-session-history session)
                       (append continuation-history
                               (list (list :role "assistant"
@@ -185,12 +267,31 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                                                    provider-responses))
                 ;; Lossless resume snapshot (bin/chat -c). Best-effort and guarded so
                 ;; a missing snapshot path or a mid-turn reload never aborts the turn.
-                (maybe-write-chat-session-history-snapshot session)
-                (log-interaction :info "turn-completed"
-                                 :initiator *interaction-turn-initiator*
-                                 :model (completion-response-model response)
-                                 :content (completion-response-text response)
-                                 :round (length provider-responses))
+                (let ((persisted (maybe-write-chat-session-history-snapshot session)))
+                  (log-interaction :info "turn-completed"
+                                   :initiator *interaction-turn-initiator*
+                                   :model (completion-response-model response)
+                                   :content (completion-response-text response)
+                                   :round (length provider-responses))
+                  ;; #91: durable per-turn summary. Tool count comes from the
+                  ;; complete PROVIDER-RESPONSES (the observer misses
+                  ;; harness-executed tools). Emitted to the observer (UI/tests)
+                  ;; and the durable JSONL log (bin/session-diagnose, #93).
+                  (log-chat-turn-summary
+                   :observer observer
+                   :status "completed"
+                   :model (chat-session-model session)
+                   :submitted-message-count (length messages)
+                   :history-message-count-before history-count-before
+                   :history-message-count-after (length (chat-session-history session))
+                   :history-persisted (and persisted t)
+                   :provider-request-count provider-request-count
+                   :provider-response-count provider-response-count
+                   :provider-failure-count provider-failure-count
+                   :tool-call-count (provider-responses-tool-call-count provider-responses)
+                   :last-finish-reason (or (completion-response-finish-reason response)
+                                           last-finish-reason "unknown")
+                   :terminal-error-class "none"))
                 response))
           (error (condition)
             ;; A failed turn must not silently vanish from replay history: the
@@ -206,7 +307,13 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
             (let* ((scrubbed (scrub-interaction-log-text (princ-to-string condition)))
                    (bounded (if (> (length scrubbed) 500)
                                 (concatenate 'string (subseq scrubbed 0 500) "...")
-                                scrubbed)))
+                                scrubbed))
+                   (error-class (classify-chat-turn-error condition))
+                   ;; If the turn already succeeded (history-updated-p) and a
+                   ;; later step crashed, the success path already wrote the
+                   ;; snapshot -- report that truthfully rather than a false
+                   ;; "not persisted".
+                   (persisted (when history-updated-p t)))
               (unless history-updated-p
                 (let ((marker (list :role "assistant"
                                     :content
@@ -216,10 +323,29 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                         (append messages (list marker)))
                   (setf history-updated-p t)
                   (note-chat-session-failure session)
-                  (maybe-write-chat-session-history-snapshot session)))
+                  (setf persisted (maybe-write-chat-session-history-snapshot session))))
               (log-interaction :error "turn-failed"
                                :initiator *interaction-turn-initiator*
-                               :message bounded))
+                               :message bounded)
+              ;; #91: emit a summary for the failed turn too (this is the case
+              ;; the diagnosis needed). Emitted OUTSIDE the guard above so a
+              ;; post-success crash still produces exactly one summary. Tool
+              ;; count is the observer's partial count (the tool loop errored
+              ;; before returning a complete PROVIDER-RESPONSES list).
+              (log-chat-turn-summary
+               :observer observer
+               :status "failed"
+               :model (chat-session-model session)
+               :submitted-message-count (length messages)
+               :history-message-count-before history-count-before
+               :history-message-count-after (length (chat-session-history session))
+               :history-persisted (and persisted t)
+               :provider-request-count provider-request-count
+               :provider-response-count provider-response-count
+               :provider-failure-count provider-failure-count
+               :tool-call-count observed-tool-call-count
+               :last-finish-reason (or last-finish-reason "none")
+               :terminal-error-class (or last-error-class error-class)))
             (error condition)))))))
 
 (defun note-chat-session-failure (session)

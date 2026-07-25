@@ -286,6 +286,7 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
         (cond
           ((and (member key '(:model :mode :tool :reason :command-name :source
                               :initiator :status :finish-reason :role
+                              :last-finish-reason :terminal-error-class
                               :provider-request-id :tool-call-id
                               :url :url-path :attempt-id :phase :error-class
                               :subagent-id :provider)
@@ -295,6 +296,11 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
            (list key value))
           ((and (member key '(:max-rounds :output-length :exit-status :turn
                               :queue-length :round :message-count :tool-call-count
+                              :submitted-message-count
+                              :history-message-count-before
+                              :history-message-count-after
+                              :provider-request-count :provider-response-count
+                              :provider-failure-count
                               :prompt-tokens :completion-tokens :total-tokens
                               :status-code :file-count
                               :loaded-file-count :total-file-count
@@ -305,7 +311,7 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
                         :test #'eq)
                 (integerp value))
            (list key value))
-          ((and (member key '(:failed-turn-p :slow-p) :test #'eq)
+          ((and (member key '(:failed-turn-p :slow-p :history-persisted) :test #'eq)
                 (typep value 'boolean))
            (list key value))
           ((and (member key '(:duration-seconds :timeout-seconds) :test #'eq)
@@ -327,7 +333,7 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
                      "synthetic-followup-started")
              :test #'string=)
      "user")
-    ((member event '("turn-completed") :test #'string=)
+    ((member event '("turn-completed" "turn-summary") :test #'string=)
      "assistant")
     ((member event '("tool-call" "tool-completed" "tool-failed"
                      "provider-request" "provider-response"

@@ -9,6 +9,20 @@
   (or (pop (scripted-backend-responses backend))
       (error "Test backend exhausted its scripted responses.")))
 
+(defclass erroring-backend (backend)
+  ((message :initarg :message :accessor erroring-backend-message
+            :initform "OpenRouter request timed out after 120 seconds.")
+   (received-requests :initform '() :accessor erroring-backend-received-requests))
+  (:documentation "Test backend that always signals a fixed error from COMPLETE.
+
+Used to exercise the failed-turn path deterministically (e.g. a provider
+timeout) so turn-summary classification does not depend on scripted-response
+exhaustion wording."))
+
+(defmethod complete ((backend erroring-backend) request)
+  (push request (erroring-backend-received-requests backend))
+  (error "~A" (erroring-backend-message backend)))
+
 (defun ensure-error-containing (thunk expected description)
   (handler-case
       (progn

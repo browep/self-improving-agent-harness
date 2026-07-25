@@ -18,6 +18,40 @@
 Concrete adapters own transport, authentication, error mapping, and raw provider
 response capture. The core harness should depend only on this generic function."))
 
+(defun classify-chat-turn-error (condition)
+  "Return a stable string error class for CONDITION (a condition or string).
+
+Deterministic and conservative: matches on the lowercased printed form and
+falls back to \"unknown-provider-error\" rather than guessing. The class is a
+machine-readable field for diagnostics (issue #92); it never carries raw error
+text. Ordering matters: timeout (the dominant real-world failure) is matched
+first, then empty/max-tokens, rate-limit, auth, generic transport, tool, and
+finally the unknown fallback."
+  (let ((msg (string-downcase (princ-to-string condition))))
+    (flet ((has (needle) (search needle msg)))
+      (cond
+        ((or (has "timed out") (has "timeout")) "provider-timeout")
+        ((or (has "max_tokens") (has "max-tokens") (has "empty content")
+             (has "finish_reason=length") (has "finish_reason=max_tokens"))
+         "empty-max-tokens")
+        ((or (has "rate limit") (has "rate-limit") (has "too many requests")
+             (has "429"))
+         "rate-limit")
+        ((or (has "unauthorized") (has "forbidden") (has "401") (has "403")
+             (has "api key") (has "api-key") (has "invalid token")
+             (has "authentication"))
+         "auth-error")
+        ((or (has "connection refused") (has "connection reset")
+             (has "econnreset") (has "econnrefused") (has "broken pipe")
+             (has "no route to host") (has "name or service not known")
+             (has "could not resolve") (has "ssl") (has "tls")
+             (has "socket") (has "network is unreachable"))
+         "transport-error")
+        ((or (has "tool_error") (has "tool failed") (has "tool execution")
+             (has "tool-error"))
+         "tool-error")
+        (t "unknown-provider-error")))))
+
 (defstruct (completion-request
             (:constructor make-completion-request
                 (&key model messages options)))
@@ -983,11 +1017,25 @@ visible even when the process is later killed."
                                   (completion-request-messages current-request)
                                   (nreverse (cons response responses))))))
                    (error (condition)
-                     (log-interaction :error "provider-request-failed"
-                                      :round round
-                                      :model (completion-request-model current-request)
-                                      :duration-seconds (elapsed-seconds-since start)
-                                      :message (princ-to-string condition))
+                     (let ((duration (elapsed-seconds-since start))
+                           (class (classify-chat-turn-error condition)))
+                       (log-interaction :error "provider-request-failed"
+                                        :round round
+                                        :model (completion-request-model current-request)
+                                        :duration-seconds duration
+                                        :terminal-error-class class
+                                        :message (princ-to-string condition))
+                       ;; Notify the turn-summary observer so a failed provider
+                       ;; round is counted and classified (issues #91/#92). Class
+                       ;; only: raw error text stays in the durable log above.
+                       ;; Guarded so a diagnostic observer never masks or
+                       ;; changes the real provider failure being re-signaled.
+                       (ignore-errors
+                         (emit-observer "provider-round-failed"
+                                        :round round
+                                        :model (completion-request-model current-request)
+                                        :duration-seconds duration
+                                        :terminal-error-class class)))
                      (error condition))))))
       (run-next-round request 0 '() 0))))
 
