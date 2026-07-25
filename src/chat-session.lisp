@@ -27,8 +27,10 @@ When finished, concisely state what you found or changed, the verification comma
 
 HISTORY contains the initial system message followed by every completed user
 turn, tool-loop continuation message, tool result, and final assistant reply.
-A failed turn deliberately does not mutate HISTORY, so a later retry has a
-well-defined request boundary."
+A failed turn preserves the failed user prompt plus a sanitized assistant
+failure marker in HISTORY, so a later turn and a durable resume see the failure
+instead of silently dropping it (which previously read as the model forgetting
+the failed request)."
   backend
   model
   options
@@ -99,12 +101,32 @@ if history was customized away from the default shape."
                   (rest history))))
     session))
 
+(defun maybe-write-chat-session-history-snapshot (session)
+  "Best-effort durable resume snapshot for SESSION (bin/chat -c, web restart).
+
+Guarded so a missing snapshot path or a mid-turn reload never aborts a chat
+turn. Called on both the successful and failed turn paths so a failed turn's
+preserved history (failed user prompt + assistant failure marker) survives a
+container restart, not only the in-memory session."
+  (when (fboundp 'write-session-history-snapshot)
+    (ignore-errors
+      (write-session-history-snapshot
+       (chat-session-history session)
+       :model (chat-session-model session)
+       :max-rounds (chat-session-max-rounds session)
+       :backend (backend-name (chat-session-backend session))
+       :provider-session-id
+       (and (typep (chat-session-backend session) 'claude-backend)
+            (claude-backend-session-id (chat-session-backend session)))))))
+
 (defun chat-session-turn (session content &key observer)
   "Run one non-empty user turn and append its complete exchange to SESSION.
 
 Returns the final COMPLETION-RESPONSE. Empty input is ignored and returns NIL
-without calling the backend. Errors leave the previous history unchanged and
-are recorded in the configured interaction log before being re-signaled.
+without calling the backend. On error, the failed user prompt and a sanitized
+assistant failure marker are appended to history (and to the durable snapshot)
+before the condition is logged and re-signaled, so the failed turn is not
+silently dropped from later context.
 
 OPTIONS/HANDLERS designators and +CHAT-SYSTEM-PROMPT+ are re-resolved here so
 reload_harness can update tool wiring and the system prompt for later turns of
@@ -139,51 +161,73 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                        :message-count (length messages)
                        :tool-names (mapcar #'princ-to-string tool-names)
                        :content content)
-      (handler-case
-          ;; Bind parent context for the run_subagent tool: the subagent
-          ;; handler reads these to default provider/model and to log
-          ;; subagent-completed events back to the parent's JSONL.
-          (let ((*subagent-parent-backend* (chat-session-backend session))
-                (*subagent-parent-model* (chat-session-model session)))
-            (multiple-value-bind (response continuation-history provider-responses)
-                (run-tool-loop (chat-session-backend session)
-                               request
-                               handlers
-                               :max-rounds (chat-session-max-rounds session)
-                               :observer observer)
-              (setf (chat-session-history session)
-                    (append continuation-history
-                            (list (list :role "assistant"
-                                        :content (completion-response-text response)))))
-              (setf (chat-session-last-provider-responses session) provider-responses
-                    (chat-session-last-accounting session)
-                    (provider-accounting-summary (chat-session-backend session)
-                                                 provider-responses))
-              ;; Lossless resume snapshot (bin/chat -c). Best-effort and guarded so
-              ;; a missing snapshot path or a mid-turn reload never aborts the turn.
-              (when (fboundp 'write-session-history-snapshot)
-                (ignore-errors
-                  (write-session-history-snapshot
-                   (chat-session-history session)
-                   :model (chat-session-model session)
-                   :max-rounds (chat-session-max-rounds session)
-                   :backend (backend-name (chat-session-backend session))
-                   :provider-session-id
-                   (and (typep (chat-session-backend session) 'claude-backend)
-                        (claude-backend-session-id (chat-session-backend session))))))
-              (log-interaction :info "turn-completed"
+      (let ((history-updated-p nil))
+        (handler-case
+            ;; Bind parent context for the run_subagent tool: the subagent
+            ;; handler reads these to default provider/model and to log
+            ;; subagent-completed events back to the parent's JSONL.
+            (let ((*subagent-parent-backend* (chat-session-backend session))
+                  (*subagent-parent-model* (chat-session-model session)))
+              (multiple-value-bind (response continuation-history provider-responses)
+                  (run-tool-loop (chat-session-backend session)
+                                 request
+                                 handlers
+                                 :max-rounds (chat-session-max-rounds session)
+                                 :observer observer)
+                (setf (chat-session-history session)
+                      (append continuation-history
+                              (list (list :role "assistant"
+                                          :content (completion-response-text response)))))
+                (setf history-updated-p t)
+                (setf (chat-session-last-provider-responses session) provider-responses
+                      (chat-session-last-accounting session)
+                      (provider-accounting-summary (chat-session-backend session)
+                                                   provider-responses))
+                ;; Lossless resume snapshot (bin/chat -c). Best-effort and guarded so
+                ;; a missing snapshot path or a mid-turn reload never aborts the turn.
+                (maybe-write-chat-session-history-snapshot session)
+                (log-interaction :info "turn-completed"
+                                 :initiator *interaction-turn-initiator*
+                                 :model (completion-response-model response)
+                                 :content (completion-response-text response)
+                                 :round (length provider-responses))
+                response))
+          (error (condition)
+            ;; A failed turn must not silently vanish from replay history: the
+            ;; model would answer a later "Still working?" from the last
+            ;; COMPLETED turn and appear to forget the failed request. Persist
+            ;; the failed user prompt plus a sanitized assistant failure marker
+            ;; so the next turn (and a durable resume/restart) still sees it.
+            ;;
+            ;; HISTORY-UPDATED-P guards the boundary: if the condition was
+            ;; signaled AFTER the successful history assignment (e.g. from
+            ;; accounting/snapshot/logging), we must not append a false failure
+            ;; marker over a turn that actually completed.
+            (let* ((scrubbed (scrub-interaction-log-text (princ-to-string condition)))
+                   (bounded (if (> (length scrubbed) 500)
+                                (concatenate 'string (subseq scrubbed 0 500) "...")
+                                scrubbed)))
+              (unless history-updated-p
+                (let ((marker (list :role "assistant"
+                                    :content
+                                    (format nil "[harness] Previous turn failed before completion and was preserved in history so the task is not lost. Some tool actions may have completed before the failure; their detailed transcript is in the session logs, not this replay history. Error: ~A Continue from the failed request or ask for a smaller next step."
+                                            bounded))))
+                  (setf (chat-session-history session)
+                        (append messages (list marker)))
+                  (setf history-updated-p t)
+                  (note-chat-session-failure session)
+                  (maybe-write-chat-session-history-snapshot session)))
+              (log-interaction :error "turn-failed"
                                :initiator *interaction-turn-initiator*
-                               :model (completion-response-model response)
-                               :content (completion-response-text response)
-                               :round (length provider-responses))
-              response))
-        (error (condition)
-          (log-interaction :error "turn-failed"
-                           :initiator *interaction-turn-initiator*
-                           :message (princ-to-string condition))
-          (error condition))))))
+                               :message bounded))
+            (error condition)))))))
 
 (defun note-chat-session-failure (session)
-  "Mark SESSION as having a failed turn without retaining partial turn state."
+  "Mark SESSION as having had a failed turn.
+
+Sets the FAILED-TURN-P flag only. Preserving the failed turn's content (the
+failed user prompt plus a sanitized assistant failure marker) is done in
+CHAT-SESSION-TURN's error clause, so a later turn and a durable resume see the
+failure instead of silently dropping it."
   (setf (chat-session-failed-turn-p session) t)
   session)

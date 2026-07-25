@@ -143,33 +143,32 @@ turn's provider request will not know that turn ever happened.
 - The next turn's `turn-submitted.messageCount` equals the count from *before*
   the failed turn — the failed turn left no trace in `history.json`.
 
-**Root cause**
+**Root cause (historical behavior; changed by the fix below)**
 
-In `src/chat-session.lisp`, `chat-session-turn` builds the request `messages` by
-appending the new user prompt to `chat-session-history`, then calls
-`run-tool-loop` inside a `handler-case`. `chat-session-history` is reassigned
-**only** on the successful return path (the `multiple-value-bind` body). The
-error clause logs a `turn-failed` interaction event and re-signals the
-condition; it does **not** append the failed user message, partial tool
-progress, or an assistant error marker to history. `note-chat-session-failure`
-only sets a `failed-turn-p` flag — it persists no content. The struct docstring
-states this is intentional ("A failed turn deliberately does not mutate HISTORY,
-so a later retry has a well-defined request boundary").
+At the time of this session, `chat-session-turn` in `src/chat-session.lisp`
+built the request `messages` by appending the new user prompt to
+`chat-session-history`, then called `run-tool-loop` inside a `handler-case`.
+`chat-session-history` was reassigned **only** on the successful return path.
+The error clause logged a `turn-failed` event and re-signaled the condition
+without appending the failed user message or any marker to history;
+`note-chat-session-failure` only set a `failed-turn-p` flag.
 
-The consequence: a timed-out repair turn is fully visible in the JSONL but never
-replayed into the model's context. When the user follows up with "Still
-working?", the model answers from the last *completed* durable turn, which reads
+The consequence: a timed-out repair turn was fully visible in the JSONL but
+never replayed into the model's context. When the user followed up with "Still
+working?", the model answered from the last *completed* durable turn, which read
 as forgetting.
 
-**Mitigations**
-
-- Reduce task scope on long tool-heavy turns; summarize progress before
-  continuing.
-- Consider a longer provider timeout for large coding turns.
-- Known limitation / candidate fix (design decision, not yet implemented):
-  persist the user message provisionally on `turn-received`, append an
-  assistant-visible error marker on `turn-failed`, and/or return partial
-  continuation history from the tool loop so failed turns are recoverable.
+**Status: fixed.** The error clause in `chat-session-turn` now appends the
+failed user prompt plus a sanitized, bounded `[harness]` assistant failure
+marker to both the in-memory history and the durable `.history.json` resume
+snapshot, then re-signals. A later "Still working?" turn replays the failed
+request so the model sees it instead of silently resuming from the last
+completed turn. A `history-updated-p` guard prevents writing a false marker when
+the condition is signaled *after* a turn already succeeded (e.g. from
+accounting/snapshot/logging). Note: only the failed user prompt and the marker
+are preserved in replay history — the detailed partial tool transcript still
+lives in the JSONL logs, not in `history.json`. Existing historical sessions
+remain historical; the fix applies to turns run after it landed.
 
 ### 2. Empty `max_tokens` terminal response (blank turn)
 

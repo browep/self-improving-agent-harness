@@ -102,6 +102,63 @@
     (note-chat-session-failure session)
     (ensure-true (chat-session-failed-turn-p session)
                  "a failed interactive turn is recorded without exposing error detail"))
+  ;; Regression for the 2026-07-25T16:33:08.866Z "apparent forgetting" session:
+  ;; a failed turn must PRESERVE the failed user prompt plus a sanitized
+  ;; assistant failure marker in history (and in the durable snapshot), so a
+  ;; later turn does not silently resume from the last COMPLETED turn.
+  (let* ((tmp (format nil "/tmp/harness-failed-turn-~A.history.json"
+                      (random 1000000000)))
+         (backend (make-instance 'scripted-backend :name "scripted" :responses '()))
+         (session (make-chat-session :backend backend :model "test/model" :handlers '())))
+    (unwind-protect
+         (let ((self-improving-agent-harness::*session-history-path* (pathname tmp)))
+           (ensure-error-containing
+            (lambda () (chat-session-turn session "Fix the issue"))
+            "scripted responses"
+            "a provider failure mid-turn re-signals the condition")
+           (let ((history (chat-session-history session)))
+             (ensure-equal '("system" "user" "assistant")
+                           (mapcar #'message-role history)
+                           "failed turn preserves system + failed user prompt + assistant marker")
+             (ensure-equal "Fix the issue" (getf (second history) :content)
+                           "failed user prompt is retained in history")
+             (let ((marker (getf (third history) :content)))
+               (ensure-true (search "[harness] Previous turn failed" marker)
+                            "failed turn appends a harness failure marker")
+               (ensure-true (search "preserved in history" marker)
+                            "failure marker explains the turn was preserved")))
+           (ensure-true (chat-session-failed-turn-p session)
+                        "a preserved failed turn still records the failed-turn flag")
+           ;; Durable snapshot must carry the failed turn so a container restart
+           ;; or bin/chat -c resume does not lose it.
+           (ensure-true (probe-file (pathname tmp))
+                        "a failed turn writes a durable history snapshot")
+           (let ((restored (self-improving-agent-harness::read-session-history-snapshot
+                            (pathname tmp))))
+             (ensure-equal '("system" "user" "assistant")
+                           (mapcar #'message-role restored)
+                           "durable snapshot preserves the failed turn shape")
+             (ensure-equal "Fix the issue" (getf (second restored) :content)
+                           "durable snapshot preserves the failed user prompt")
+             (ensure-true (search "[harness] Previous turn failed"
+                                  (getf (third restored) :content))
+                          "durable snapshot preserves the failure marker"))
+           ;; A subsequent successful turn must SEE the preserved failed turn in
+           ;; the request it sends to the backend (proving the model is no longer
+           ;; blind to the failed request).
+           (setf (scripted-backend-responses backend)
+                 (list (make-completion-response :text "resumed" :model "test/model")))
+           (chat-session-turn session "Still working?")
+           (let* ((requests (reverse (scripted-backend-received-requests backend)))
+                  (followup-messages (completion-request-messages (car (last requests)))))
+             (ensure-equal '("system" "user" "assistant" "user")
+                           (mapcar #'message-role followup-messages)
+                           "follow-up request replays the preserved failed turn before the new prompt")
+             (ensure-equal "Fix the issue" (getf (second followup-messages) :content)
+                           "follow-up request still carries the previously failed user prompt")
+             (ensure-equal "Still working?" (getf (fourth followup-messages) :content)
+                           "follow-up request ends with the new user prompt")))
+      (ignore-errors (delete-file (pathname tmp)))))
   (let ((saved-max-tokens (uiop:getenv "HARNESS_CHAT_MAX_TOKENS")))
     (unwind-protect
          (progn
