@@ -130,6 +130,21 @@ The decisive signal for "forgetting": a `turn-received` exists in the JSONL, but
 that user message and its work are **absent** from `history.json`. The next
 turn's provider request will not know that turn ever happened.
 
+### Terminal `turn-summary` records
+
+Each terminal turn now writes one `turn-summary` JSONL event and forwards it to
+the Web UI observer. It contains the status; backend/model; submitted and
+durable-history counts before/after; whether the snapshot persisted; provider
+request/response/failure and tool-call counts; terminal finish reason; and a
+normalized terminal error class.
+
+`turn-summary.userPrompt` deliberately contains the **raw user prompt**. This is
+an explicit exception for durable Harness session diagnostics: the repository's
+higher-level privacy/security controls protect access to the session-log volume.
+It does not change the redaction policy for provider captures, supervisor
+protocols, transport logs, credentials, or raw provider errors. The terminal
+summary retains an error *class*, not raw provider error text.
+
 ## Common failure modes
 
 ### 1. Provider timeout → failed turn dropped from durable history (apparent "forgetting")

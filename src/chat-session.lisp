@@ -133,7 +133,8 @@ to avoid inflating the count."
                      0))
           :initial-value 0))
 
-(defun log-chat-turn-summary (&key observer status model submitted-message-count
+(defun log-chat-turn-summary (&key observer status model user-prompt
+                                   submitted-message-count
                                    history-message-count-before
                                    history-message-count-after history-persisted
                                    provider-request-count provider-response-count
@@ -143,13 +144,14 @@ to avoid inflating the count."
 
 Written to the durable JSONL interaction log (consumed by bin/session-diagnose,
 #93) and forwarded to OBSERVER when supplied (web UI / tests). Carries counts
-and a classified TERMINAL-ERROR-CLASS only -- never raw error text or prompt
-content. HISTORY-MESSAGE-COUNT-BEFORE/AFTER and HISTORY-PERSISTED are the fields
+a classified TERMINAL-ERROR-CLASS, and the raw USER-PROMPT as explicitly
+approved for this harness. HISTORY-MESSAGE-COUNT-BEFORE/AFTER and HISTORY-PERSISTED are the fields
 that make the 2026-07-25T16:33:08.866Z 'failed turn dropped from durable
 history' case readable from a single record."
   (let ((fields (list :initiator *interaction-turn-initiator*
                       :status status
                       :model model
+                      :user-prompt user-prompt
                       :submitted-message-count submitted-message-count
                       :history-message-count-before history-message-count-before
                       :history-message-count-after history-message-count-after
@@ -281,6 +283,7 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                    :observer observer
                    :status "completed"
                    :model (chat-session-model session)
+                   :user-prompt content
                    :submitted-message-count (length messages)
                    :history-message-count-before history-count-before
                    :history-message-count-after (length (chat-session-history session))
@@ -336,6 +339,7 @@ synthetic follow-ups bind it to \"harness\") and written into JSONL."
                :observer observer
                :status "failed"
                :model (chat-session-model session)
+               :user-prompt content
                :submitted-message-count (length messages)
                :history-message-count-before history-count-before
                :history-message-count-after (length (chat-session-history session))

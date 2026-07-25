@@ -284,6 +284,12 @@ harness back-and-forth. Secret-looking substrings are scrubbed."
   (loop for (key value) on fields by #'cddr
         append
         (cond
+          ;; Raw user prompts in TURN-SUMMARY are explicitly retained by product
+          ;; direction. This bypasses the ordinary content-logging gate and
+          ;; truncation/scrubbing path; the repository's higher-level privacy
+          ;; and security controls own access to these durable session logs.
+          ((and (eq key :user-prompt) (stringp value))
+           (list key value))
           ((and (member key '(:model :mode :tool :reason :command-name :source
                               :initiator :status :finish-reason :role
                               :last-finish-reason :terminal-error-class

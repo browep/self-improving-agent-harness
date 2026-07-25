@@ -143,6 +143,8 @@
              (let ((f (cdr (first summaries))))
                (ensure-equal "completed" (getf f :status)
                              "success summary status is completed")
+               (ensure-equal "hello" (getf f :user-prompt)
+                             "success summary carries the raw user prompt")
                (ensure-equal 2 (getf f :submitted-message-count)
                              "success summary counts system+user submitted messages")
                (ensure-equal 1 (getf f :history-message-count-before)
@@ -169,6 +171,8 @@
                           "turn-summary is durable in JSONL")
              (ensure-true (search "\"status\":\"completed\"" jc)
                           "durable turn-summary records completed status")
+             (ensure-true (search "\"userPrompt\":\"hello\"" jc)
+                          "durable turn-summary records raw userPrompt")
              (ensure-true (search "\"historyPersisted\":true" jc)
                           "durable turn-summary records historyPersisted (camelCase)")
              (ensure-true (search "\"terminalErrorClass\":\"none\"" jc)
@@ -208,6 +212,8 @@
              (let ((f (cdr (first summaries))))
                (ensure-equal "failed" (getf f :status)
                              "failure summary status is failed")
+               (ensure-equal "Fix the issue" (getf f :user-prompt)
+                             "failure summary carries the raw failed user prompt")
                (ensure-equal "provider-timeout" (getf f :terminal-error-class)
                              "failure summary classifies the provider timeout")
                (ensure-equal 1 (getf f :provider-request-count)
@@ -237,13 +243,13 @@
                           "failed turn's turn-summary is durable in JSONL")
              (ensure-true (search "\"status\":\"failed\"" summary-line)
                           "durable turn-summary records failed status")
-             ;; The summary line carries the class only -- never the raw error
-             ;; text (which legitimately appears in provider-request-failed) and
-             ;; never the user prompt.
+             ;; Raw prompt retention in the terminal summary is explicitly
+             ;; authorized for this harness; raw provider error text remains
+             ;; excluded in favor of terminalErrorClass.
              (ensure-true (not (search "120 seconds" summary-line))
                           "turn-summary carries the class only, never raw error text")
-             (ensure-true (not (search "Fix the issue" summary-line))
-                          "turn-summary never carries the raw user prompt")))
+             (ensure-true (search "\"userPrompt\":\"Fix the issue\"" summary-line)
+                          "turn-summary records the raw failed user prompt")))
       (self-improving-agent-harness::configure-interaction-logging nil)
       (when (probe-file directory)
         (uiop:delete-directory-tree directory :validate t))))
