@@ -288,12 +288,12 @@ The case study was diagnosable from the raw JSONL plus `history.json`, but it
 required manual reconstruction. The following follow-up issues would make this
 and future diagnoses much faster:
 
-| Gap | Issue |
+| Capability | Status / issue |
 |-----|-------|
-| Per-turn `turn-summary` event with provider req/resp/failure counts and durable-history persistence counts | [#91](https://github.com/browep/self-improving-agent-harness/issues/91) |
-| Machine-readable `terminalErrorClass` + provider-attempt correlation ids | [#92](https://github.com/browep/self-improving-agent-harness/issues/92) |
-| `bin/session-diagnose <session-id>` to automate this document's forensic workflow | [#93](https://github.com/browep/self-improving-agent-harness/issues/93) |
-| Web UI live diagnostics: backend/model/token budget, last-turn status, durable-save state | [#94](https://github.com/browep/self-improving-agent-harness/issues/94) |
+| Per-turn `turn-summary` with provider req/resp/failure counts, raw prompt, and durable-history persistence counts | **Complete** ([#91](https://github.com/browep/self-improving-agent-harness/issues/91)) |
+| Machine-readable `terminalErrorClass` + provider-attempt correlation IDs | **Complete** ([#92](https://github.com/browep/self-improving-agent-harness/issues/92)) |
+| `bin/session-diagnose <session-id>` to automate this document's forensic workflow | **Remaining:** [#93](https://github.com/browep/self-improving-agent-harness/issues/93) |
+| Web UI live diagnostics: backend/model/token budget, last-turn status, durable-save state | **Remaining:** [#94](https://github.com/browep/self-improving-agent-harness/issues/94) |
 
 Related existing issues:
 
