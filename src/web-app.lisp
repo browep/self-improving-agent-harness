@@ -162,20 +162,30 @@ such values fall through to the Haiku default rather than erroring."
           ((string= name "claude-sdk") "claude-sonnet-5")
           (t "claude-haiku-4-5-20251001")))))
 
+(defun web-populate-dropdown-options (select options default-value)
+  "(Re)populate SELECT's <option> children from OPTIONS, selecting DEFAULT-VALUE.
+
+Used both to build a dropdown's initial option list and to refresh it later
+(issue #90: the Model dropdown's options did not update when Backend changed,
+because they were only ever populated once at page-construction time)."
+  (setf (clog:inner-html select) "")
+  (clog:add-select-option select "" "-- Select or type --")
+  (dolist (option options)
+    (clog:add-select-option select option option))
+  ;; A native <select> silently rejects a value that is not one of its
+  ;; options, so a HARNESS_CHAT_MODEL override (or any default) not already
+  ;; in OPTIONS would fail to stick. Add it explicitly when missing.
+  (when (and default-value
+             (plusp (length default-value))
+             (not (member default-value options :test #'string=)))
+    (clog:add-select-option select default-value default-value))
+  (setf (clog:value select) default-value)
+  select)
+
 (defun web-create-editable-dropdown (parent options default-value)
   "Create a select element with predefined options and styling."
   (let ((select (clog:create-select parent)))
-    (clog:add-select-option select "" "-- Select or type --")
-    (dolist (option options)
-      (clog:add-select-option select option option))
-    ;; A native <select> silently rejects a value that is not one of its
-    ;; options, so a HARNESS_CHAT_MODEL override (or any default) not already
-    ;; in OPTIONS would fail to stick. Add it explicitly when missing.
-    (when (and default-value
-               (plusp (length default-value))
-               (not (member default-value options :test #'string=)))
-      (clog:add-select-option select default-value default-value))
-    (setf (clog:value select) default-value)
+    (web-populate-dropdown-options select options default-value)
     (web-style select "padding:6px;font-family:ui-monospace,monospace")
     select))
 
@@ -355,6 +365,28 @@ after a turn completes."
           (clog:value model-input) default-model-name)
     (setf (clog:attribute composer "placeholder") "Enter a prompt")
     (setf (clog:disabledp send) t)
+    ;; Issue #90: the Model dropdown's <option> list was only ever populated
+    ;; once at page-construction time from the initial default backend, so
+    ;; switching Backend (e.g. claude-sdk -> synthetic) left Model showing
+    ;; the previous backend's model names until a full page reload. Refresh
+    ;; Model's options whenever Backend changes; keep the current Model value
+    ;; if it is still valid for the new backend's option list, otherwise fall
+    ;; back to that backend's default model.
+    (clog:set-on-change
+     backend-input
+     (lambda (obj)
+       (declare (ignore obj))
+       (let* ((backend-name (string-downcase
+                             (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                          (clog:value backend-input))))
+              (new-options (web-model-options-for-backend backend-name))
+              (current-model (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                          (clog:value model-input)))
+              (kept-value (if (and (plusp (length current-model))
+                                   (member current-model new-options :test #'string=))
+                              current-model
+                              (web-default-model-for-backend backend-name))))
+         (web-populate-dropdown-options model-input new-options kept-value))))
     (clog:set-on-focus
      composer
      (lambda (obj)
