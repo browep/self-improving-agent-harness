@@ -102,18 +102,32 @@
     (note-chat-session-failure session)
     (ensure-true (chat-session-failed-turn-p session)
                  "a failed interactive turn is recorded without exposing error detail"))
-  (let ((options (self-improving-agent-harness:chat-options)))
-    (ensure-equal 0.2 (getf options :temperature)
-                  "chat-options keeps a low default temperature")
-    (ensure-true (integerp (getf options :max-tokens))
-                 "chat-options supplies max-tokens")
-    (ensure-equal 16384 (getf options :max-tokens)
-                  "chat-options defaults to 16384 max-tokens for long tool-using turns")
-    (ensure-equal "auto" (getf options :tool-choice)
-                  "chat-options sets tool_choice auto explicitly")
-    (ensure-true (search "native tools/tool_calls"
-                         (getf (getf (first (getf options :tools)) :function) :description))
-                 "run_shell tool description requires native tool_calls"))
+  (let ((saved-max-tokens (uiop:getenv "HARNESS_CHAT_MAX_TOKENS")))
+    (unwind-protect
+         (progn
+           ;; HARNESS_CHAT_MAX_TOKENS overrides CHAT-OPTIONS' :max-tokens (see
+           ;; CHAT-OPTIONS in src/chat-cli.lisp), and a live chat session's
+           ;; container environment may already export it (e.g. to configure
+           ;; that session's own interactive turns). Unset it here so this
+           ;; block observes the unconfigured *CHAT-MAX-TOKENS* default rather
+           ;; than ambient environment state, mirroring the isolation used by
+           ;; the explicit-override test immediately below.
+           (sb-posix:unsetenv "HARNESS_CHAT_MAX_TOKENS")
+           (let ((options (self-improving-agent-harness:chat-options)))
+             (ensure-equal 0.2 (getf options :temperature)
+                           "chat-options keeps a low default temperature")
+             (ensure-true (integerp (getf options :max-tokens))
+                          "chat-options supplies max-tokens")
+             (ensure-equal 16384 (getf options :max-tokens)
+                           "chat-options defaults to 16384 max-tokens for long tool-using turns")
+             (ensure-equal "auto" (getf options :tool-choice)
+                           "chat-options sets tool_choice auto explicitly")
+             (ensure-true (search "native tools/tool_calls"
+                                  (getf (getf (first (getf options :tools)) :function) :description))
+                          "run_shell tool description requires native tool_calls")))
+      (if saved-max-tokens
+          (setf (uiop:getenv "HARNESS_CHAT_MAX_TOKENS") saved-max-tokens)
+          (sb-posix:unsetenv "HARNESS_CHAT_MAX_TOKENS"))))
   (let ((saved (uiop:getenv "HARNESS_CHAT_MAX_TOKENS")))
     (unwind-protect
          (progn
