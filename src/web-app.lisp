@@ -162,6 +162,22 @@ such values fall through to the Haiku default rather than erroring."
           ((string= name "claude-sdk") "claude-sonnet-5")
           (t "claude-haiku-4-5-20251001")))))
 
+(defun web-model-value-after-backend-change (current-model-value new-backend)
+  "Return the Model value to select after Backend switches to NEW-BACKEND.
+
+Pure decision logic factored out of the CLOG change handler (issue #90) so it
+is unit-testable without a live browser connection. Preserves
+CURRENT-MODEL-VALUE (trimmed) when it is still a valid option for
+NEW-BACKEND's model list; otherwise falls back to NEW-BACKEND's normal
+default via WEB-DEFAULT-MODEL-FOR-BACKEND."
+  (let* ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
+                               (or current-model-value "")))
+         (options (web-model-options-for-backend new-backend)))
+    (if (and (plusp (length trimmed))
+             (member trimmed options :test #'string=))
+        trimmed
+        (web-default-model-for-backend new-backend))))
+
 (defun web-populate-dropdown-options (select options default-value)
   "(Re)populate SELECT's <option> children from OPTIONS, selecting DEFAULT-VALUE.
 
@@ -371,7 +387,10 @@ after a turn completes."
     ;; the previous backend's model names until a full page reload. Refresh
     ;; Model's options whenever Backend changes; keep the current Model value
     ;; if it is still valid for the new backend's option list, otherwise fall
-    ;; back to that backend's default model.
+    ;; back to that backend's default model. The value-selection decision is
+    ;; factored into WEB-MODEL-VALUE-AFTER-BACKEND-CHANGE (a pure function,
+    ;; unit-tested in tests/web-app.lisp) so it does not require a live CLOG
+    ;; connection to verify.
     (clog:set-on-change
      backend-input
      (lambda (obj)
@@ -379,14 +398,11 @@ after a turn completes."
        (let* ((backend-name (string-downcase
                              (string-trim '(#\Space #\Tab #\Newline #\Return)
                                           (clog:value backend-input))))
-              (new-options (web-model-options-for-backend backend-name))
-              (current-model (string-trim '(#\Space #\Tab #\Newline #\Return)
-                                          (clog:value model-input)))
-              (kept-value (if (and (plusp (length current-model))
-                                   (member current-model new-options :test #'string=))
-                              current-model
-                              (web-default-model-for-backend backend-name))))
-         (web-populate-dropdown-options model-input new-options kept-value))))
+              (kept-value (web-model-value-after-backend-change
+                           (clog:value model-input) backend-name)))
+         (web-populate-dropdown-options model-input
+                                        (web-model-options-for-backend backend-name)
+                                        kept-value))))
     (clog:set-on-focus
      composer
      (lambda (obj)

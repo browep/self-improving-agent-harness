@@ -55,6 +55,7 @@
                (:file "tests/subagent")
                (:file "tests/web-session")
                (:file "tests/web-markdown")
+               (:file "tests/web-app")
                ;; Standalone CLOG web UI browser integration test
                ;; (issue #42). NOT invoked by RUN-TESTS: it needs a
                ;; live CLOG server + headless Chromium. Load and run

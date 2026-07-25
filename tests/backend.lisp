@@ -50,5 +50,6 @@
       (run-subagent-tests)
       (run-web-session-tests)
       (run-web-markdown-tests)
+      (run-web-app-tests)
       (format t "Self-improving-agent-harness smoke tests passed.~%")
       t))
