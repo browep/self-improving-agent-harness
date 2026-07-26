@@ -4,15 +4,15 @@ set -eu
 port=17881
 session_id=${HARNESS_CHAT_SESSION_ID:-}
 fake_scenario=${HARNESS_WEB_FAKE_SCENARIO:-}
-# The harness Web UI is intentionally reachable from the host network by
-# default. Use --loopback to restrict it when operating on an untrusted host.
-publish_mode=--publish-any
+# The Web UI is deliberately published on every host interface. This launcher
+# has no loopback-only mode; restrict reachability with the host firewall or a
+# reverse proxy if needed.
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --port) [ "$#" -ge 2 ] || { echo 'bin/web: --port requires a value' >&2; exit 2; }; port=$2; shift 2 ;;
     --session-id) [ "$#" -ge 2 ] || { echo 'bin/web: --session-id requires a value' >&2; exit 2; }; session_id=$2; shift 2 ;;
-    --public) publish_mode=--publish-any; shift ;;
-    --loopback) publish_mode=--publish-loopback; shift ;;
+    --public) shift ;;
+    --loopback) echo 'bin/web: --loopback is not supported; the Web UI is always externally published' >&2; exit 2 ;;
     --fake-scenario) [ "$#" -ge 2 ] || { echo 'bin/web: --fake-scenario requires a value' >&2; exit 2; }; [ "$2" = tool-success ] || { echo 'bin/web: only tool-success is currently supported' >&2; exit 2; }; fake_scenario=$2; shift 2 ;;
     *) echo "bin/web: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -23,4 +23,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 export HARNESS_WEB_PORT=18080
 export HARNESS_CHAT_SESSION_ID=$session_id
 export HARNESS_WEB_FAKE_SCENARIO=$fake_scenario
-exec "$repo_root/bin/container" --writable-workspace "$publish_mode" "$port:18080" --env HARNESS_WEB_PORT --env HARNESS_CHAT_SESSION_ID --env HARNESS_WEB_FAKE_SCENARIO --noinform --load scripts/web.lisp
+exec "$repo_root/bin/container" --writable-workspace --publish-any "$port:18080" \
+  --env HARNESS_WEB_PORT --env HARNESS_CHAT_SESSION_ID --env HARNESS_WEB_FAKE_SCENARIO \
+  --env HARNESS_BACKEND --env HARNESS_CHAT_MAX_TOKENS \
+  --noinform --load scripts/web.lisp

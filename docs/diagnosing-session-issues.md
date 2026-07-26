@@ -21,7 +21,8 @@ The session id is an ISO-8601 timestamp, e.g. `2026-07-25T16:33:08.866Z`.
 ## Live health checks
 
 ```sh
-# Web UI reachable?
+# Web UI reachable locally? (`bin/web` publishes it publicly on 0.0.0.0;
+# use the host's externally routable address from another machine.)
 curl -sS -o /dev/null -w 'http=%{http_code}\n' http://127.0.0.1:17881/
 
 # Container healthy, or stuck in a restart loop?
