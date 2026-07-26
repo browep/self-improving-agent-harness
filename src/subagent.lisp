@@ -34,9 +34,13 @@
   (format nil
           "You are a subagent inside the Self-Improving Agent Harness. ~
 Your job is to complete the task given to you and return a final answer.~%~%~
-You have one tool available: run_shell, which runs a shell command in the ~
-harness container and returns combined stdout/stderr. Use it to inspect ~
-files, run tests, and make edits as needed.~%~%~
+You have two tools available: run_shell, which runs a shell command in the ~
+harness container and returns combined stdout/stderr; and eval_lisp, which ~
+evaluates Lisp code directly in this running Lisp image (same trust level as ~
+the parent's reload_harness, but eval_lisp never reads or writes a file — a ~
+change made through it is in-memory only and is not a substitute for editing ~
+a source file with run_shell). Use these to inspect files, run tests, make ~
+edits, and inspect/adjust in-process state as needed.~%~%~
 You cannot spawn further subagents. You cannot reload the harness. ~
 Focus on your specific task and return a clear, concise final answer when ~
 done.")
@@ -112,20 +116,30 @@ present in the environment."
 ;;; ---------------------------------------------------------------------------
 
 (defun subagent-tool-definitions ()
-  "Return tool definitions for a subagent: run_shell only.
+  "Return tool definitions for a subagent: run_shell and eval_lisp only.
 
 This structurally enforces the no-recursion rule: the subagent has no
-run_subagent tool and no reload_harness tool."
-  (list (first (chat-tool-definitions))))
+run_subagent tool and no reload_harness tool. eval_lisp is included at the
+same trust level run_shell already has (a subagent worktree/process is
+already fully mutable by run_shell); it grants no additional file-system or
+process capability beyond what run_shell already provides."
+  (remove-if (lambda (definition)
+               (not (member (getf (getf definition :function) :name)
+                            '("run_shell" "eval_lisp")
+                            :test #'string=)))
+             (chat-tool-definitions)))
 
 (defun subagent-tool-handlers ()
-  "Return tool handlers for a subagent: run_shell only.
+  "Return tool handlers for a subagent: run_shell and eval_lisp only.
 
-Uses a symbol designator so reload_harness can redefine shell-tool mid-session."
-  '(("run_shell" . shell-tool)))
+Uses symbol designators so reload_harness can redefine shell-tool /
+eval-lisp-tool mid-session."
+  '(("run_shell" . shell-tool)
+    ("eval_lisp" . eval-lisp-tool)))
 
 (defun subagent-options ()
-  "Return completion options for a subagent: temperature, max-tokens, run_shell tool."
+  "Return completion options for a subagent: temperature, max-tokens, run_shell
+and eval_lisp tools."
   (list :temperature 0.2
         :max-tokens 4096
         :tools (subagent-tool-definitions)))

@@ -79,6 +79,17 @@ to merge it. The harness's default product posture is allow-all: it does not
 add a policy gate that prevents an agent from changing code. Experiment
 promotion is kept separate so the evidence remains meaningful.
 
+`eval_lisp` (issue #96) is a distinct, narrower mechanism: it evaluates a Lisp
+form directly in the already-running chat image instead of writing/loading a
+file. It is useful for quickly inspecting or adjusting in-process state (for
+example, a parameter such as `*chat-max-tokens*` or `*tool-result-content-limit*`)
+without a source edit, but it does not read or write any file. A change made
+only through `eval_lisp` is in-memory-only: it is not committed source, is not
+visible to `git diff`, and is not evidence of a persisted change. Treat it as
+the fast experimentation half of the same `run_shell` + `reload_harness` loop,
+not a replacement for it. See [`docs/eval-lisp-tool.md`](eval-lisp-tool.md) for
+the full contract.
+
 ### 3. Structured Common Lisp source-mutation candidates
 
 The repository also contains a deliberately narrow source-mutation prototype.

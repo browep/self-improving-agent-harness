@@ -154,7 +154,7 @@ backend. The OpenRouter non-streaming chat-completions adapter and sequential
 tool-call loop are implemented. `bin/chat` provides both a one-prompt CLI and
 a terminal-only persistent interactive chat session. The interactive session
 keeps its ordered system/user/assistant/tool history in memory, executes
-`run_shell` and in-process `reload_harness` inside the container, sends matching results back to the model, and
+`run_shell`, in-process `reload_harness`, and in-process `eval_lisp` inside the container, sends matching results back to the model, and
 prints final assistant content. Interactive sessions also accept `/reload` and
 `/max-rounds [N]` without a provider round-trip. It does not provide streaming/SSE,
 persistent transcripts, or a policy/sandbox layer. `make repl`
@@ -171,7 +171,8 @@ Lisp implementations in an already-running chat.
 | `run_shell` | Run a bounded `/bin/sh -lc` command in the harness container; optional `timeout` defaults to 60 seconds. |
 | `web_search` | Search current web information through Tavily; requires `TAVILY_API_KEY`. |
 | `reload_harness` | Reload harness Lisp sources into the current image without clearing chat history. |
-| `run_subagent` | Start one independent, non-nesting subagent with optional provider/model/round/timeout overrides. |
+| `eval_lisp` | Evaluate Lisp code directly in the running harness Lisp image (same trust level as `reload_harness`); optional `timeout` defaults to 30 seconds. It does not read or write any file — a change made through it is in-memory only, lost on the next `reload_harness`/restart unless also made durable with `run_shell` + `reload_harness`. See [`docs/eval-lisp-tool.md`](eval-lisp-tool.md). |
+| `run_subagent` | Start one independent, non-nesting subagent with optional provider/model/round/timeout overrides. Subagents have `run_shell` and `eval_lisp`, but not `reload_harness` or `run_subagent` (no recursion). |
 | `browser_open`, `browser_click`, `browser_type`, `browser_get_text` | Open and interact with a persistent Playwright browser page. |
 | `browser_eval`, `browser_assert` | Evaluate or assert JavaScript in that page. |
 | `browser_screenshot`, `browser_video`, `browser_close` | Save visual evidence/video or release the browser bridge. |

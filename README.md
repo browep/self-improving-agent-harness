@@ -307,7 +307,7 @@ offline. See `docs/claude-sdk-backend.md` for the full scope and rationale.
 
 ## Chat CLI
 
-`bin/chat` runs the harness `run_shell` tool inside its Docker container. It has
+`bin/chat` runs the harness `run_shell`, `reload_harness`, and `eval_lisp` tools inside its Docker container (see ["Available chat tools"](docs/runtime.md#available-chat-tools) for the full list, and [`docs/eval-lisp-tool.md`](docs/eval-lisp-tool.md) for the `eval_lisp` in-process-REPL contract). It has
 three deliberately distinct modes:
 
 ```bash

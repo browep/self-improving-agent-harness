@@ -5,30 +5,34 @@
 ;;; These tests exercise the run_subagent tool's structural guarantees without
 ;;; making real provider calls:
 ;;; - No-recursion: the subagent tool set excludes run_subagent.
-;;; - Tool set: the subagent gets only run_shell.
+;;; - Tool set: the subagent gets run_shell and eval_lisp (issue #96).
 ;;; - ID format: subagent IDs are ISO-timestamp-like.
 ;;; - Placeholder: the tool handler returns immediately with a placeholder.
 ;;; - Delivery queue: completed results are queued and drainable.
 ;;; - Timeout: the subagent thread-main honors a timeout.
 
 (defun run-subagent-tests ()
-  ;; 1. Subagent tool definitions contain only run_shell.
-  (let ((defs (self-improving-agent-harness::subagent-tool-definitions)))
-    (ensure-true (= 1 (length defs))
-                 "subagent tool definitions contain exactly one tool")
-    (ensure-true (string= "run_shell"
-                          (getf (getf (first defs) :function) :name))
-                 "subagent tool definitions contain only run_shell"))
+  ;; 1. Subagent tool definitions contain exactly run_shell and eval_lisp
+  ;;    (issue #96 extends the subagent tool set with eval_lisp).
+  (let* ((defs (self-improving-agent-harness::subagent-tool-definitions))
+         (names (mapcar (lambda (d) (getf (getf d :function) :name)) defs)))
+    (ensure-true (= 2 (length defs))
+                 "subagent tool definitions contain exactly two tools")
+    (ensure-true (member "run_shell" names :test #'string=)
+                 "subagent tool definitions include run_shell")
+    (ensure-true (member "eval_lisp" names :test #'string=)
+                 "subagent tool definitions include eval_lisp"))
 
-  ;; 2. Subagent tool handlers contain only run_shell.
+  ;; 2. Subagent tool handlers contain exactly run_shell and eval_lisp.
   (let ((handlers (self-improving-agent-harness::subagent-tool-handlers)))
-    (ensure-true (= 1 (length handlers))
-                 "subagent handlers contain exactly one entry")
-    (ensure-true (string= "run_shell" (car (first handlers)))
-                 "subagent handlers contain only run_shell")
+    (ensure-true (= 2 (length handlers))
+                 "subagent handlers contain exactly two entries")
     (ensure-true (eq 'self-improving-agent-harness::shell-tool
-                     (cdr (first handlers)))
-                 "subagent run_shell handler is the shell-tool symbol"))
+                     (cdr (assoc "run_shell" handlers :test #'string=)))
+                 "subagent run_shell handler is the shell-tool symbol")
+    (ensure-true (eq 'self-improving-agent-harness::eval-lisp-tool
+                     (cdr (assoc "eval_lisp" handlers :test #'string=)))
+                 "subagent eval_lisp handler is the eval-lisp-tool symbol"))
 
   ;; 3. No run_subagent in the subagent tool set (structural no-recursion).
   (let ((defs (self-improving-agent-harness::subagent-tool-definitions))

@@ -42,6 +42,7 @@
       (run-chat-session-tests)
       (run-env-file-tests)
       (run-shell-tool-tests)
+      (run-eval-lisp-tests)
       (run-web-search-tests)
       (run-model-metadata-tests)
       (run-reload-tests)

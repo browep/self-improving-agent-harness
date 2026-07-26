@@ -81,6 +81,15 @@ designator path.")
                 :description "Reload self-improving-agent-harness sources into this same Lisp image after editing project Lisp files. Returns a structured status line (status=ok|note|warning|error files=N warnings=N notes=N ...) plus any non-benign compiler diagnostics. Does not reset chat history or max-rounds. ALWAYS invoke through the native tools/tool_calls API only — never XML/text tool markup in assistant content."
                 :parameters (:type "object")))
     (:type "function"
+     :function (:name "eval_lisp"
+                :description "Evaluate Lisp code in the running harness Lisp image (this same process), at the same trust level as reload_harness. Forms are read and evaluated in the self-improving-agent-harness package, so bare DEFUN/DEFPARAMETER/DEFVAR and existing harness symbols resolve without qualification. Returns captured standard output plus the printed return value(s) of the last form. This does NOT read or write any file: a redefinition made here takes effect immediately in this live image but is never written to source, and will be lost/overwritten by a process restart or a later reload_harness. To persist a change, explicitly edit the source file with run_shell (and call reload_harness if you want the on-disk version reloaded). Optional timeout is a wall-clock bound in seconds (default 30); a form that hangs is interrupted and reported as a timeout. ALWAYS invoke through the native tools/tool_calls API only — never XML/text tool markup in assistant content."
+                :parameters (:type "object"
+                             :properties (:code (:type "string"
+                                                 :description "One or more Lisp forms to read and evaluate in order, in the harness package. The tool result shows captured output plus the printed value(s) of the last form.")
+                                          :timeout (:type "number"
+                                                    :description "Optional wall-clock timeout in seconds. Defaults to 30. On expiry evaluation is interrupted and a timeout message is returned."))
+                             :required ("code"))))
+    (:type "function"
      :function (:name "run_subagent"
                 :description "Spawn an independent subagent with its own prompt, provider, and model. Returns immediately with a placeholder; the subagent's final answer is delivered to you in a later turn once it completes. A subagent cannot spawn further subagents. ALWAYS invoke through the native tools/tool_calls API only."
                 :parameters (:type "object"
@@ -160,6 +169,7 @@ visible to the already-running interactive session."
   '(("run_shell" . shell-tool)
     ("web_search" . web-search-tool)
     ("reload_harness" . reload-tool)
+    ("eval_lisp" . eval-lisp-tool)
     ("run_subagent" . subagent-tool)
     ("browser_open" . browser-open-tool)
     ("browser_click" . browser-click-tool)

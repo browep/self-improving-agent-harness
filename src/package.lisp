@@ -37,6 +37,12 @@
    #:*run-shell-timeout-kill-after-seconds*
    #:report-run-shell-timing
    #:run-run-shell-after-hooks
+   ;; Lisp REPL tool (eval_lisp / issue #96)
+   #:eval-lisp-tool
+   #:run-eval-lisp
+   #:read-all-forms-from-string
+   #:*eval-lisp-default-timeout-seconds*
+   #:*eval-lisp-package*
    ;; Web search tool (web_search / Tavily)
    #:web-search-tool
    #:tavily-search

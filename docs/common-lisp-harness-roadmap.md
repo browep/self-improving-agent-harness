@@ -9,7 +9,8 @@ The current harness already provides the first pieces of this substrate:
 - provider-neutral completion dispatch through the `complete` generic function;
 - versioned experiment, candidate, run, evaluation, and decision records;
 - a persistent tool-using chat worker that can use `reload_harness` after an
-  edit; and
+  edit, or `eval_lisp` to read/redefine live state directly (see below and
+  [`docs/eval-lisp-tool.md`](eval-lisp-tool.md)); and
 - an isolated-worktree supervisor that independently records Git and verification
   evidence without merging or promoting a candidate.
 
@@ -48,10 +49,16 @@ starting point for this direction.
 ### Live adaptation inside a disposable candidate worker
 
 Common Lisp permits a running worker to redefine functions and methods, then
-continue the same session. The current `reload_harness` tool demonstrates this
-mechanism. A candidate worker can alter a bounded behavior—for example tool
-result summarization, a retry policy, or a workflow stage—and immediately
-exercise that change on a fresh task.
+continue the same session. The `reload_harness` tool demonstrates this by
+reloading whole source files; the `eval_lisp` tool (issue #96) demonstrates the
+finer-grained case, evaluating an arbitrary form directly in the running image
+at the same trust level. A candidate worker can alter a bounded behavior—for
+example tool result summarization, a retry policy, or a workflow stage—and
+immediately exercise that change on a fresh task, either by editing and
+reloading a source file or by redefining a function/parameter in place with
+`eval_lisp`. `eval_lisp` never touches disk on its own, so an in-memory-only
+change made this way is not yet a candidate artifact; it must still be written
+to source (via `run_shell`) to be reviewed, diffed, or retained as evidence.
 
 The parent supervisor must remain outside that mutable runtime. It owns the
 worktree lifecycle, task split, budgets, evaluator, report, and retain/reject
