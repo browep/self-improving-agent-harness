@@ -41,8 +41,28 @@ Do **not** dump the full env block into shared output: it contains
 
 ## Safely extract session artifacts
 
-Mount the volume read-only into a temp dir. Keep analysis scripts in `/tmp`, not
-in the repo.
+For a concise forensic report, use the built-in command directly. It reads the
+Docker volume through a read-only mount when given a session ID; if your account
+needs Docker-group access, invoke the command via `sg docker -c`:
+
+```sh
+sg docker -c 'bin/session-diagnose 2026-07-25T16:33:08.866Z'
+```
+
+For an already-extracted artifact (no Docker access required):
+
+```sh
+bin/session-diagnose --path /tmp/harness-session/2026-07-25T16:33:08.866Z.jsonl
+```
+
+`bin/session-diagnose` reports event totals, a per-turn provider/tool timeline,
+normalized failure classes, durable user-message count, received-vs-persisted
+mismatches, and `HARNESS_CHAT_MAX_TOKENS` when a running container exposes that
+single non-secret setting. It never dumps container environments or raw provider
+error bodies; displayed text is bounded and secret-redacted.
+
+To inspect the raw files manually, mount the volume read-only into a temp dir.
+Keep analysis scripts in `/tmp`, not in the repo:
 
 ```sh
 mkdir -p /tmp/harness-session
@@ -292,7 +312,7 @@ and future diagnoses much faster:
 |-----|-------|
 | Per-turn `turn-summary` with provider req/resp/failure counts, raw prompt, and durable-history persistence counts | **Complete** ([#91](https://github.com/browep/self-improving-agent-harness/issues/91)) |
 | Machine-readable `terminalErrorClass` + provider-attempt correlation IDs | **Complete** ([#92](https://github.com/browep/self-improving-agent-harness/issues/92)) |
-| `bin/session-diagnose <session-id>` to automate this document's forensic workflow | **Remaining:** [#93](https://github.com/browep/self-improving-agent-harness/issues/93) |
+| `bin/session-diagnose <session-id>` to automate this document's forensic workflow | **Complete** ([#93](https://github.com/browep/self-improving-agent-harness/issues/93)) |
 | Web UI live diagnostics: backend/model/token budget, last-turn status, durable-save state | **Remaining:** [#94](https://github.com/browep/self-improving-agent-harness/issues/94) |
 
 Related existing issues:

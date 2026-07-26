@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""Summarize durable Harness session artifacts without replaying a provider turn.
+
+The command accepts either a session id (read from a Docker volume) or an
+explicit .jsonl artifact path.  It intentionally prints only compact,
+redacted diagnostic values; it never prints a container environment block.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import collections
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from typing import Any
+
+DEFAULT_VOLUME = "self-improving-agent-harness-logs"
+MAX_TEXT = 180
+
+# Kept deliberately conservative: diagnose output is intended for sharing.
+SECRET_PATTERNS = (
+    (re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)([^\s,;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*)([^\s,;]+)"), r"\1[REDACTED]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"), "[REDACTED]"),
+    (re.compile(r"\b(?:AKIA|sk-ant-)[A-Za-z0-9_-]{8,}\b"), "[REDACTED]"),
+)
+
+
+def redact(value: Any, limit: int = MAX_TEXT) -> str:
+    """Return a compact, shareable representation that never retains secrets."""
+    text = "" if value is None else str(value)
+    for pattern, replacement in SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def parse_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Read current JSON payloads and historic Python-repr payload strings safely."""
+    payload = row.get("payload", {})
+    if isinstance(payload, dict):
+        return payload
+    if not isinstance(payload, str):
+        return {}
+    for parser in (ast.literal_eval, json.loads):
+        try:
+            parsed = parser(payload)
+        except (SyntaxError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def read_jsonl_bytes(data: bytes, source: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line_number, raw_line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+        if not raw_line.strip():
+            continue
+        try:
+            row = json.loads(raw_line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{source}:{line_number}: invalid JSONL record: {exc.msg}") from exc
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def docker_read(volume: str, filename: str) -> bytes | None:
+    """Read one artifact through a read-only volume mount; return None if absent."""
+    command = [
+        "docker", "run", "--rm", "-v", f"{volume}:/data:ro", "alpine",
+        "sh", "-c", "test -f \"/data/$1\" && cat \"/data/$1\"", "sh", filename,
+    ]
+    try:
+        result = subprocess.run(command, check=False, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def load_artifacts(path: Path | None, session_id: str | None, volume: str) -> tuple[str, list[dict[str, Any]], dict[str, Any] | None, str]:
+    if path is not None:
+        jsonl_path = path.expanduser().resolve()
+        if not jsonl_path.is_file():
+            raise ValueError(f"artifact does not exist: {jsonl_path}")
+        if jsonl_path.suffix != ".jsonl":
+            raise ValueError(f"artifact must end in .jsonl: {jsonl_path}")
+        inferred_id = jsonl_path.name[:-len(".jsonl")]
+        history_path = jsonl_path.with_name(f"{inferred_id}.history.json")
+        history = json.loads(history_path.read_text(encoding="utf-8")) if history_path.is_file() else None
+        return inferred_id, read_jsonl_bytes(jsonl_path.read_bytes(), str(jsonl_path)), history, str(jsonl_path)
+
+    assert session_id is not None
+    jsonl = docker_read(volume, f"{session_id}.jsonl")
+    if jsonl is None:
+        raise ValueError(f"session artifact not found in Docker volume {volume!r}: {session_id}.jsonl")
+    history_bytes = docker_read(volume, f"{session_id}.history.json")
+    history = json.loads(history_bytes.decode("utf-8", errors="replace")) if history_bytes else None
+    return session_id, read_jsonl_bytes(jsonl, f"docker-volume:{volume}/{session_id}.jsonl"), history, f"docker-volume:{volume}"
+
+
+def event_name(payload: dict[str, Any]) -> str:
+    return str(payload.get("event") or payload.get("type") or "unknown")
+
+
+def event_text(payload: dict[str, Any]) -> str:
+    for key in ("content", "userPrompt", "prompt", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def classify_failure(payload: dict[str, Any]) -> str:
+    direct = payload.get("terminalErrorClass") or payload.get("errorClass")
+    if isinstance(direct, str) and direct:
+        return direct
+    text = event_text(payload).lower()
+    if "timeout" in text or "timed out" in text:
+        return "provider-timeout"
+    if "rate limit" in text or "429" in text:
+        return "rate-limit"
+    if "auth" in text or "credential" in text or "unauthorized" in text or "forbidden" in text:
+        return "authentication-error"
+    if any(part in text for part in ("connection", "dns", "socket", "transport")):
+        return "transport-error"
+    return "unknown-provider-error"
+
+
+def build_turns(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    turns: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for row in rows:
+        payload = parse_payload(row)
+        name = event_name(payload)
+        if name == "turn-received":
+            if current is not None:
+                turns.append(current)
+            current = {"prompt": event_text(payload), "requests": 0, "responses": 0,
+                       "failures": 0, "tools": 0, "finish": "-", "status": "unterminated",
+                       "attempts": []}
+            continue
+        if current is None:
+            continue
+        if name == "turn-submitted":
+            current["submitted"] = payload.get("messageCount", payload.get("message-count", "-"))
+        elif name == "provider-request":
+            current["requests"] += 1
+            attempt_id = payload.get("attemptId", payload.get("attempt-id"))
+            if isinstance(attempt_id, str):
+                current["attempts"].append(attempt_id)
+        elif name == "provider-response":
+            current["responses"] += 1
+            current["finish"] = str(payload.get("finishReason", payload.get("finish-reason", current["finish"])))
+        elif name == "provider-request-failed":
+            current["failures"] += 1
+            current.setdefault("failure_classes", []).append(classify_failure(payload))
+        elif name in ("tool-call-started", "tool-call", "tool-completed", "tool-failed"):
+            if name in ("tool-call-started", "tool-call"):
+                current["tools"] += 1
+        elif name == "turn-summary":
+            current["status"] = str(payload.get("status", current["status"]))
+            current["finish"] = str(payload.get("lastFinishReason", current["finish"]))
+            summary_attempts = payload.get("providerAttemptIds")
+            if isinstance(summary_attempts, list) and all(isinstance(item, str) for item in summary_attempts):
+                current["attempts"] = summary_attempts
+            direct_class = payload.get("terminalErrorClass")
+            if isinstance(direct_class, str) and direct_class not in ("", "none"):
+                current.setdefault("failure_classes", []).append(direct_class)
+        elif name == "turn-completed":
+            current["status"] = "completed"
+        elif name == "turn-failed":
+            current["status"] = "failed"
+            turns.append(current)
+            current = None
+    if current is not None:
+        turns.append(current)
+    return turns
+
+
+def durable_user_messages(history: dict[str, Any] | None) -> list[str]:
+    if not isinstance(history, dict):
+        return []
+    messages = history.get("messages")
+    if not isinstance(messages, list):
+        return []
+    return [item.get("content", "") for item in messages
+            if isinstance(item, dict) and item.get("role") == "user" and isinstance(item.get("content"), str)]
+
+
+def missing_received_prompts(turns: list[dict[str, Any]], durable: list[str]) -> list[tuple[int, str]]:
+    available = collections.Counter(durable)
+    missing: list[tuple[int, str]] = []
+    for index, turn in enumerate(turns, 1):
+        prompt = turn.get("prompt", "")
+        if available[prompt]:
+            available[prompt] -= 1
+        else:
+            missing.append((index, prompt))
+    return missing
+
+
+def live_max_tokens() -> str | None:
+    """Return a running container's max-token override without printing its env."""
+    try:
+        ids = subprocess.run(["docker", "ps", "-q"], check=False, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True).stdout.split()
+    except OSError:
+        return None
+    for container_id in ids:
+        result = subprocess.run(["docker", "inspect", container_id,
+                                 "--format", "{{range .Config.Env}}{{println .}}{{end}}"],
+                                check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        for line in result.stdout.splitlines():
+            if line.startswith("HARNESS_CHAT_MAX_TOKENS="):
+                return line.split("=", 1)[1]
+    return None
+
+
+def print_report(session_id: str, rows: list[dict[str, Any]], history: dict[str, Any] | None, source: str) -> None:
+    events = [event_name(parse_payload(row)) for row in rows]
+    counts = collections.Counter(events)
+    turns = build_turns(rows)
+    failures = collections.Counter(cls for turn in turns for cls in turn.get("failure_classes", []))
+    durable = durable_user_messages(history)
+    missing = missing_received_prompts(turns, durable)
+
+    print(f"Session: {redact(session_id)}")
+    print(f"Source: {redact(source)}")
+    print("Event counts: " + " ".join(
+        f"{name}={counts[name]}" for name in ("turn-received", "turn-completed", "turn-failed")))
+    print("Provider events: " + " ".join(
+        f"{name}={counts[name]}" for name in ("provider-request", "provider-response", "provider-request-failed")))
+    print("Turns:")
+    print("  # status     submitted req resp fail tools finish     attempts prompt")
+    for index, turn in enumerate(turns, 1):
+        print("  {index:<1} {status:<10} {submitted!s:<9} {requests:<3} {responses:<4} {failures:<4} {tools:<5} {finish:<10} {attempts:<8} {prompt}".format(
+            index=index, status=redact(turn["status"], 10), submitted=turn.get("submitted", "-"),
+            requests=turn["requests"], responses=turn["responses"], failures=turn["failures"],
+            tools=turn["tools"], finish=redact(turn["finish"], 10), attempts=len(turn["attempts"]),
+            prompt=redact(turn.get("prompt", ""))))
+    if failures:
+        print("Failure classes: " + " ".join(f"{name}={count}" for name, count in sorted(failures.items())))
+    else:
+        print("Failure classes: none")
+    print(f"Durable user messages: {len(durable)}" + ("" if history is not None else " (history snapshot missing)"))
+    print(f"Received vs durable history: {len(missing)} missing")
+    for index, prompt in missing:
+        print(f"  turn {index}: {redact(prompt)}")
+    max_tokens = live_max_tokens()
+    if max_tokens is not None:
+        print(f"Live HARNESS_CHAT_MAX_TOKENS: {redact(max_tokens, 32)}")
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Diagnose one durable Harness session without replaying it.")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("session_id", nargs="?", help="session id to read read-only from Docker volume")
+    source.add_argument("--path", type=Path, help="explicit path to <session-id>.jsonl")
+    parser.add_argument("--volume", default=DEFAULT_VOLUME, help=f"Docker volume for session-id input (default: {DEFAULT_VOLUME})")
+    args = parser.parse_args(argv)
+    try:
+        session_id, rows, history, artifact_source = load_artifacts(args.path, args.session_id, args.volume)
+        print_report(session_id, rows, history, artifact_source)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"session-diagnose: {redact(exc)}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

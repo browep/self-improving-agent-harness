@@ -175,6 +175,13 @@ Lisp implementations in an already-running chat.
 | `browser_eval`, `browser_assert` | Evaluate or assert JavaScript in that page. |
 | `browser_screenshot`, `browser_video`, `browser_close` | Save visual evidence/video or release the browser bridge. |
 
+### Available diagnostic tooling
+
+| Command | Purpose |
+| --- | --- |
+| `bin/session-diagnose <session-id>` | Read durable session JSONL/history from the read-only logs Docker volume and print redacted event totals, per-turn status, provider failures, history mismatches, and live max-token override when discoverable. |
+| `bin/session-diagnose --path /path/to/<session-id>.jsonl` | Diagnose an extracted artifact without Docker access. |
+
 All tools must be invoked through native provider `tool_calls`, never through
 XML/text markup in assistant content. Tool availability is backend- and
 runtime-dependent: `claude-sdk` is the deployed Web UI backend; a required key
